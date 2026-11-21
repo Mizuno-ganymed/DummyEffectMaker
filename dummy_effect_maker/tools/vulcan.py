@@ -113,6 +113,7 @@ class VulcanTool(BaseTool):
         plugs = [mu.world_position_plug(n, created) for n in locators]
         curve = self._build_path(cmds, plugs, v["path_type"] == PATH_SMOOTH,
                                  prefix, root, created)
+        curve_shape = cmds.listRelatives(curve, shapes=True, fullPath=True)[0]
 
         # --- 弾の元メッシュとマテリアル
         _, sg = mu.create_surface_shader(prefix + "_mat", v["color"])
@@ -133,13 +134,9 @@ class VulcanTool(BaseTool):
             bullet = cmds.parent(bullet, bullets_grp)[0]
             bullets.append(bullet)
 
-            motion_path = cmds.pathAnimation(
-                bullet, curve=curve, fractionMode=True, follow=True,
-                followAxis="x", upAxis="y", worldUpType="vector",
-                worldUpVector=(0, 1, 0),
-                startTimeU=fire, endTimeU=fire + travel)
-            cmds.keyTangent(motion_path, attribute="uValue",
-                            inTangentType="linear", outTangentType="linear")
+            motion_path = self._attach_motion_path(
+                cmds, bullet, curve_shape, fire, fire + travel,
+                "%s_motion_%03d" % (prefix, i + 1))
             created.append(motion_path)
 
             # 発射フレームで出現し、着弾の次のフレームで消える
@@ -162,6 +159,35 @@ class VulcanTool(BaseTool):
         return root
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _attach_motion_path(cmds, bullet, curve_shape, start, end, name):
+        """bullet を curve_shape に沿って start → end で等速移動させる。
+
+        cmds.pathAnimation はアンドゥチャンク内で使うと、アンドゥ時に
+        それ以前の操作が戻らなくなる (Maya 2027 で確認) ため、
+        motionPath ノードを直接組む。設定は pathAnimation の
+        -fractionMode -follow -followAxis x -upAxis y
+        -worldUpType vector -worldUpVector 0 1 0 と同じ。
+        """
+        mp = cmds.createNode("motionPath", name=name)
+        cmds.setAttr(mp + ".fractionMode", 1)  # 弧長基準 (等速)
+        cmds.setAttr(mp + ".follow", 1)
+        cmds.setAttr(mp + ".frontAxis", 0)     # X
+        cmds.setAttr(mp + ".upAxis", 1)        # Y
+        cmds.setAttr(mp + ".worldUpType", 3)   # vector
+        cmds.setAttr(mp + ".worldUpVector", 0.0, 1.0, 0.0, type="double3")
+        cmds.connectAttr(curve_shape + ".worldSpace[0]", mp + ".geometryPath")
+        cmds.connectAttr(bullet + ".rotateOrder", mp + ".rotateOrder")
+        cmds.connectAttr(mp + ".allCoordinates", bullet + ".translate")
+        cmds.connectAttr(mp + ".rotate", bullet + ".rotate")
+        # Maya のマニピュレータ表示用 (pathAnimation と同じ接続)
+        cmds.connectAttr(mp + ".message", bullet + ".specifiedManipLocation")
+        cmds.setKeyframe(mp, attribute="uValue", time=start, value=0.0,
+                         inTangentType="linear", outTangentType="linear")
+        cmds.setKeyframe(mp, attribute="uValue", time=end, value=1.0,
+                         inTangentType="linear", outTangentType="linear")
+        return mp
+
     @staticmethod
     def _build_path(cmds, plugs, smooth, prefix, root, created):
         a, b, c = [cmds.getAttr(p)[0] for p in plugs]
