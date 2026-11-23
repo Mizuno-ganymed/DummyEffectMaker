@@ -596,7 +596,31 @@ def lightning_main_point(style, k, n, c, v, top, ground):
     return add(add(top, mul(sub(ground, top), u)), add(mul(a, oa * jag), mul(b, ob * jag)))
 
 
-def _strand_rows(pts, widths, cp, cdir):
+ANIME_SUB = 4   # アニメ: ジグザグの辺を細かく分ける数 (折れ目だけで向きが変わり、円柱がつぶれない)
+
+
+def strand_rows(style, count):
+    """点 count 個の列の、帯の行の数 (アニメは辺を ANIME_SUB に分ける)。"""
+    count = int(count)
+    return (count - 1) * ANIME_SUB + 1 if style == STYLE_ANIME else count
+
+
+def _subdivide(pts, widths, parts):
+    """点の列を、辺ごとに parts に分けた列にする (位置・太さは直線で補間)。"""
+    out_p, out_w = [], []
+    for k in range(len(pts) - 1):
+        for s in range(parts):
+            t = s / float(parts)
+            out_p.append(add(pts[k], mul(sub(pts[k + 1], pts[k]), t)))
+            out_w.append(widths[k] + (widths[k + 1] - widths[k]) * t)
+    out_p.append(pts[-1])
+    out_w.append(widths[-1])
+    return out_p, out_w
+
+
+def _strand_rows(pts, widths, cp, cdir, style=None):
+    if style == STYLE_ANIME:
+        pts, widths = _subdivide(pts, widths, ANIME_SUB)
     out = []
     n = len(pts)
     for j in range(n):
@@ -617,7 +641,7 @@ def lightning_rows(style, frame, v, top, ground, cp, cdir, segments, branches, b
     sd = v["seed"]
     n, m = int(segments), int(branch_segments)
     strike = lightning_strike(frame, v)
-    count = n + int(branches) * m
+    count = strand_rows(style, n) + int(branches) * strand_rows(style, m)
     if strike is None:
         return [(top, IDENTITY, 0.0)] * count, 0.0
     c, ts = strike
@@ -632,7 +656,7 @@ def lightning_rows(style, frame, v, top, ground, cp, cdir, segments, branches, b
         widths.append(v["width"] * (1 - (1 - v["taper"]) * u) if k <= last else 0.0)
     for k in range(last + 1, n):
         pts[k] = pts[last]
-    rows = _strand_rows(pts, widths, cp, cdir)
+    rows = _strand_rows(pts, widths, cp, cdir, style)
     for br in range(int(branches)):
         kb = int(math.floor((n - 1) * (0.15 + 0.6 * h(br, c, 80, sd))))
         tb = kb / float(max(n - 1, 1))
@@ -653,7 +677,7 @@ def lightning_rows(style, frame, v, top, ground, cp, cdir, segments, branches, b
             bw.append(v["width"] * 0.5 * (1 - (1 - v["taper"]) * tb) * (1 - u) if prog > tb and j <= blast else 0.0)
         for j in range(blast + 1, m):
             bpts[j] = bpts[blast]
-        rows += _strand_rows(bpts, bw, cp, cdir)
+        rows += _strand_rows(bpts, bw, cp, cdir, style)
     return rows, lightning_alpha(frame, v, c, ts)
 
 

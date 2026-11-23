@@ -894,9 +894,14 @@ def b14_lightning():
         bolt, glow = _wx.part(root, "_bolt"), _wx.part(root, "_glow")
         v = rt.read_params(root, kind.stored_params())
         n, nb, m = int(v["segments"]), int(v["branches"]), int(v["branch_segments"])
+        rn, rm = mo.strand_rows(ml.STYLES[kind.effect_type], n), mo.strand_rows(ml.STYLES[kind.effect_type], m)
         check(u"%s: 作成 (雲の点は落ちる所の真上・帯 2 本・点の数)" % tool.label,
               near(gnd.location, (3, 4, 0)) and near(top.location, (3, 4, 40)) and root.get("dfx_camera") == cam
-              and bolt.data["dfx_count"] == n + nb * m and glow is not None)
+              and bolt.data["dfx_count"] == rn + nb * rm and glow is not None)
+        if kind is ml.ANIME:
+            check("稲妻 (アニメ): 円柱 (点ごとに分割数の輪。両端はふた)",
+                  len(bolt.data.vertices) == (rn + nb * rm) * int(v["sides"])
+                  and len(bolt.data.polygons) == (rn - 1 + nb * (rm - 1)) * int(v["sides"]) + 2 * (1 + nb))
         top.location.x -= 2
         bad, lit = [], 0
         for f in (1, 2, 3, 4, 6, 9, 12, 13, 15, 22, 33, 45):
@@ -913,6 +918,19 @@ def b14_lightning():
                 bad.append(("alpha", f))
         check(u"%s: Maya 版と同じ形・伸び方・太さ・ちらつき (動かした雲の点)" % tool.label, not bad and lit >= 4,
               str((bad[:3], lit)))
+    # アニメ: 真上から見ても太さがある (輪は水平に広がる)、芯は向いている所の色
+    aroot = bpy.data.objects.get("dfx_lightningAnime1")
+    abolt = _wx.part(aroot, "_bolt")
+    bpy.context.scene.frame_set(4)
+    va = rt.read_params(aroot, ml.ANIME.stored_params())
+    sides = int(va["sides"])
+    ring = [Vector(_wx.read_particle(abolt, 5)[s]) for s in range(sides)]
+    spread_xy = max((a - b).xy.length for a in ring for b in ring)
+    cam_p = bpy.context.scene.camera.matrix_world.translation
+    center = sum(ring, Vector()) / sides
+    core = Vector(_wx.read_particle(_wx.part(aroot, "_glow"), 5)[0])
+    check("稲妻 (アニメ): 真上から見ても太さがある / 芯は円柱の手前 (カメラ側) にある", spread_xy > va["width"] * 0.3
+          and (core - cam_p).length < (center - cam_p).length - va["width"] * 0.3, str(spread_xy))
     root = bpy.data.objects.get("dfx_lightning1")
     bolt = _wx.part(root, "_bolt")
     bpy.context.scene.frame_set(3)

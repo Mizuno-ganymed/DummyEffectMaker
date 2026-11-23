@@ -10,6 +10,7 @@ class ColorButton(QtWidgets.QPushButton):
         super(ColorButton, self).__init__(parent)
         self.setFixedWidth(60)
         self.clicked.connect(self._pick)
+        self.on_change = None   # 色を選んだ時に呼ぶ (アトリビュートエディタ用)
         self.set_rgb(rgb)
 
     def set_rgb(self, rgb):
@@ -25,6 +26,8 @@ class ColorButton(QtWidgets.QPushButton):
             QtGui.QColor.fromRgbF(*self._rgb), self)
         if color.isValid():
             self.set_rgb((color.redF(), color.greenF(), color.blueF()))
+            if self.on_change:
+                self.on_change()
 
 
 def _make_editor(param, value):

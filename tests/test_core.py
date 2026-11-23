@@ -1137,5 +1137,5 @@ def test_lightning_strikes_and_shapes():
     va.update(count=1, start_frame=1.0, spread=0.0)
     rows, _ = mo.lightning_rows(mo.STYLE_ANIME, 6, va, top, gnd, cp, cdir, 12, 2, 5)
     _, d, a, _ = mo.lightning_frame(top, gnd)
-    side = [mo.dot(mo.sub(rows[k][0], mo.add(top, mo.mul(mo.sub(gnd, top), k / 11.0))), a) for k in range(1, 11)]
+    side = [mo.dot(mo.sub(rows[k * mo.ANIME_SUB][0], mo.add(top, mo.mul(mo.sub(gnd, top), k / 11.0))), a) for k in range(1, 11)]
     assert all(x * y < 0 for x, y in zip(side[:-1], side[1:]))

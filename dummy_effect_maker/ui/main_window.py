@@ -6,6 +6,7 @@ import traceback
 
 from ..core import ToolContext, ToolError, execute
 from ..core import registry
+from .attribute_editor import AttributeEditor
 from .param_dialog import ParamDialog
 from .qt import QtCore, QtWidgets
 from .settings_page import SettingsDialog
@@ -24,7 +25,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Maya のメインウインドウを親にしても独立したウインドウとして出す
         self.setWindowFlags(self.windowFlags() | QtCore.Qt.Window)
         self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
-        self.resize(320, 480)
+        self.resize(640, 520)
 
         self.log_view = QtWidgets.QPlainTextEdit()
         self.log_view.setReadOnly(True)
@@ -44,10 +45,23 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([340, 140])
-        self.setCentralWidget(splitter)
+
+        # 右側: 専用のアトリビュートエディタ (Maya の中だけ。選んだエフェクトのパラメータ)
+        self.attribute_editor = AttributeEditor(self._attribute_backend(), run_update=self.run_update_for,
+                                                parent=self)
+        self.side_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.side_splitter.addWidget(splitter)
+        self.side_splitter.addWidget(self.attribute_editor)
+        self.side_splitter.setStretchFactor(0, 1)
+        self.side_splitter.setStretchFactor(1, 1)
+        self.side_splitter.setSizes([320, 320])
+        self.setCentralWidget(self.side_splitter)
+        if self.attribute_editor.backend is None:
+            self.attribute_editor.show_empty(u"アトリビュートエディタは Maya の中でだけ使えます")
 
         self.tools = []
         self.populate()
+        self.attribute_editor.start()
 
     # ------------------------------------------------------------------ UI
     def _build_menus(self):
@@ -63,6 +77,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if not scene.isEmpty():
             scene.addSeparator()
         scene.addAction(u"環境設定 (プリセットの保存先)...", self.open_settings)
+        view = self._menu(u"表示")
+        self.attribute_editor_action = view.addAction(u"アトリビュートエディタ")
+        self.attribute_editor_action.setCheckable(True)
+        self.attribute_editor_action.setChecked(True)
+        self.attribute_editor_action.toggled.connect(self.attribute_editor.setVisible)
         dev_menu = self._menu(u"開発")
         dev_menu.addAction(u"ツールを再読み込み", self._on_reload)
         dev_menu.addAction(u"ログをクリア", lambda: self.log_view.clear())
@@ -156,6 +175,27 @@ class MainWindow(QtWidgets.QMainWindow):
         run_dialog = getattr(dialog, "exec", None) or dialog.exec_
         if run_dialog() == ParamDialog.APPLY:
             self.run_tool(tool)
+
+    def _attribute_backend(self):
+        if self.host.name != "maya":
+            return None
+        from ..tools._attr_backend import MayaAttributeBackend
+        return MayaAttributeBackend()
+
+    def run_update_for(self, effect_type, root):
+        """アトリビュートエディタの「更新」: その種類の「〜を更新」ツールを実行する (ルートは選択済み)。"""
+        from ..tools._attr_backend import update_tool_name
+        name = update_tool_name(effect_type)
+        for tool in self.tools:
+            if type(tool).__name__ == name and tool.is_available(self.host.name):
+                self.run_tool(tool)
+                return True
+        self.log(u"  ✖ %s を更新するツールが見つかりません" % effect_type)
+        return False
+
+    def closeEvent(self, event):
+        self.attribute_editor.shutdown()
+        super(MainWindow, self).closeEvent(event)
 
     def _on_load_error(self, module_name, tb):
         self.log(u"ツール %s の読み込みに失敗しました\n%s" % (module_name, tb))

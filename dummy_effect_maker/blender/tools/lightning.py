@@ -5,8 +5,9 @@ Maya 版 (tools/lightning.py) と同じパラメータ・同じ計算 (motion.py
     dfx_lightningN          ルート (パラメータ。dfx_camera = 帯が向くカメラ)
       dfx_lightningN_top    雲の点 (動かしてよい)
       dfx_lightningN_ground 落ちる所 (動かしてよい)
-      dfx_lightningN_bolt   帯 (本筋 → 枝の順の点ごとに 2 頂点。毎フレーム置き直す)
-      dfx_lightningN_glow   2 本目の帯 (実写: 外側の光 / アニメ: 白い芯)
+      dfx_lightningN_bolt   帯 (本筋 → 枝の順の点ごとに 2 頂点。毎フレーム置き直す)。
+                            アニメは円柱 (点ごとに輪。どこから見ても太さがある)
+      dfx_lightningN_glow   2 本目の帯 (実写: 外側の光 / アニメ: 円柱の表面のすぐ前の芯)
 """
 from __future__ import absolute_import
 
@@ -22,7 +23,8 @@ from . import _build as bd, _wx as wx
 def _tool(maya_tool):
     return dict(label=maya_tool.label, tab=wx.TAB, category=ml.CATEGORY, order=maya_tool.order,
                 hosts=("blender",), params=maya_tool.params,
-                tooltip=maya_tool.tooltip + u"\n点の数・枝の数・2 本目の帯の太さを変えたら「エフェクトを更新」を押します。")
+                tooltip=maya_tool.tooltip + u"\n点の数・枝の数 (実写は光の広がり、アニメは円柱の分割数) を変えたら"
+                                            u"「エフェクトを更新」を押します。")
 
 
 def create(ctx, kind, v):
@@ -58,7 +60,8 @@ class LightningAnimeTool(BaseTool):
 
 def build(root, v):
     n, m, nb = int(v["segments"]), int(v["branch_segments"]), int(v["branches"])
-    strands = [n] + [m] * nb
+    style = ml.STYLES[root.get(rt.TYPE_KEY)]
+    strands = [mo.strand_rows(style, n)] + [mo.strand_rows(style, m)] * nb   # 帯の行の数 (アニメは細かく分ける)
     faces = []
     k = 0
     for count in strands:
@@ -66,12 +69,19 @@ def build(root, v):
             faces.append((2 * (k + j), 2 * (k + j) + 1, 2 * (k + j) + 3, 2 * (k + j) + 2))
         k += count
     total = sum(strands)
-    glow = v["glow_width"]
-    for name, color, half, z in (("_bolt", v["color"], 0.5, 0.0),
-                                 ("_glow", v["glow_color"], 0.5 * glow, -0.05 if glow >= 1 else 0.05)):
+    anime = root.get(rt.TYPE_KEY) == ml.ANIME.effect_type
+    half, z = ml.second_ribbon(style, v["glow_width"])
+    if anime:
+        # 円柱 (点ごとに輪。どこから見ても太さがある) + 円柱の表面のすぐ前に、カメラを向いた芯の帯
+        sides = int(v["sides"])
+        bolt = ((ml.tube_ring(sides), [], None), [tuple(f) for f in ml.tube_faces(strands, sides)], True)
+    else:
+        bolt = (([(0.0, 0.5, 0.0), (0.0, -0.5, 0.0)], [], None), faces, False)
+    for name, color, (template, fcs, smooth) in (
+            ("_bolt", v["color"], bolt),
+            ("_glow", v["glow_color"], (([(0.0, half, z), (0.0, -half, z)], [], None), faces, False))):
         mat = rt.flat_material(root.name + name + "_mat", color, v["opacity"], owner=root)
-        obj = wx.particle_object(root, root.name + name, ([(0.0, half, z), (0.0, -half, z)], [], None), total,
-                                 mat, faces=faces)
+        obj = wx.particle_object(root, root.name + name, template, total, mat, faces=fcs, smooth=smooth)
         obj.data["dfx_strands"] = [n, nb, m]
 
 

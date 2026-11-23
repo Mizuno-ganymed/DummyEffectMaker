@@ -2,7 +2,9 @@
 """天候タブ: 稲妻。雲のロケータ (_top) から地面のロケータ (_ground) へ、何回か落ちる。
 
     稲妻 (実写)    細い線。細かいギザギザと枝がたくさん。まわりに青白い光の帯
-    稲妻 (アニメ)  太い帯。大きなジグザグと少しの枝。真ん中に白い芯
+    稲妻 (アニメ)  太い円柱 (チューブ)。大きなジグザグと少しの枝。真ん中に白い芯
+                   (円柱なので、真上・真下から見ても太さがあり、パースが付く。芯は円柱の表面の
+                   すぐ前に置いた、カメラを向く帯なので、どこから見ても真ん中に見える)
 
 回ごとに形と落ちる所 (落ちる所のばらつき) が変わる。1 回の稲妻は、雲から地面へ
 「伸びるフレーム数」で伸びてから、ちらつきながら「光るフレーム数」だけ光って消える。
@@ -11,12 +13,14 @@
     dfx_lightningN            ルート (パラメータ。カメラとつながる)
       dfx_lightningN_top      雲の点 (動かしてよい)
       dfx_lightningN_ground   落ちる所 (動かしてよい。作成時にオブジェクトを選んでいればその位置)
-      dfx_lightningN_bolt     帯 (本筋 → 枝の順の点ごとに 2 頂点)
-      dfx_lightningN_glow     2 本目の帯 (実写: 外側の光 / アニメ: 白い芯)
+      dfx_lightningN_bolt     帯 (本筋 → 枝の順の点ごとに 2 頂点)。アニメは円柱 (点ごとに輪)
+      dfx_lightningN_glow     2 本目の帯 (実写: 外側の光 / アニメ: 円柱の前の芯)
       dfx_lightningN_joints   帯の点のジョイント
 計算は motion.py の lightning_* と同じ式 (Blender 版も同じ関数を使う)。
 """
 from __future__ import absolute_import
+
+import math
 
 from ..core import BaseTool, Param
 from . import _weather as wx
@@ -24,8 +28,39 @@ from .. import motion as mo
 
 TAB = wx.TAB
 CATEGORY = u"稲妻"
-REBUILD = ("segments", "branches", "branch_segments", "glow_width")
+REBUILD = ("segments", "branches", "branch_segments", "glow_width")               # 実写
+ANIME_REBUILD = ("segments", "branches", "branch_segments", "glow_width", "sides")  # アニメ
 CREATE_ONLY = ("height",)
+CORE_FRONT = 0.55   # アニメの芯の帯の位置 (円柱の中心から、カメラの方へ太さ × これ。円柱の表面のすぐ前)
+
+
+# ---------------------------------------------------------------- アニメの円柱 (Blender 版も使う)
+def tube_ring(sides):
+    """円柱の輪 (点のローカル: X が進む向き。Y-Z 面の直径 1 の円)。"""
+    sides = int(sides)
+    return [(0.0, 0.5 * math.cos(2 * math.pi * k / sides), 0.5 * math.sin(2 * math.pi * k / sides))
+            for k in range(sides)]
+
+
+def tube_faces(strands, sides):
+    """点の列 (strands = 各列の点の数) を円柱でつなぐ面 (両端はふたをする)。"""
+    faces = []
+    k = 0
+    for count in strands:
+        for j in range(count - 1):
+            a, b = (k + j) * sides, (k + j + 1) * sides
+            faces += [[a + s, a + (s + 1) % sides, b + (s + 1) % sides, b + s] for s in range(sides)]
+        faces.append([k * sides + s for s in reversed(range(sides))])
+        faces.append([(k + count - 1) * sides + s for s in range(sides)])
+        k += count
+    return faces
+
+
+def second_ribbon(style, glow_width):
+    """2 本目の帯の (半分の幅, カメラの方への位置)。実写: 線の後ろの光 / アニメ: 円柱の表面のすぐ前の芯。"""
+    if style == mo.STYLE_ANIME:
+        return 0.5 * glow_width, CORE_FRONT
+    return 0.5 * glow_width, (-0.05 if glow_width >= 1 else 0.05)
 
 
 def _hash(i, c, k):
@@ -42,10 +77,12 @@ def _params(real):
                    tooltip=u"光の帯の太さ (線の太さの倍率)"),
              Param("glow_opacity", u"光の濃さ", 0.35, minimum=0.0, maximum=1.0, step=0.1)]
             if real else
-            [Param("glow_color", u"芯の色", (1.0, 1.0, 1.0), kind="color", tooltip=u"帯の真ん中の芯の色"),
+            [Param("glow_color", u"芯の色", (1.0, 1.0, 1.0), kind="color",
+                   tooltip=u"円柱の真ん中に見える芯の色"),
              Param("glow_width", u"芯の太さ", 0.4, minimum=0.0, maximum=1.0, step=0.1,
-                   tooltip=u"芯の太さ (帯の太さの倍率。0 で芯なし)"),
-             Param("glow_opacity", u"芯の濃さ", 1.0, minimum=0.0, maximum=1.0, step=0.1)])
+                   tooltip=u"芯の太さ (円柱の太さの割合。0 で芯なし)"),
+             Param("glow_opacity", u"芯の濃さ", 1.0, minimum=0.0, maximum=1.0, step=0.1),
+             Param("sides", u"円柱の分割数", 8, minimum=3, maximum=32, tooltip=u"円柱のまわりの分割数")])
     return ([Param("count", u"落ちる回数", 5, minimum=1, maximum=200),
              Param("start_frame", u"開始フレーム", 1.0, decimals=2, tooltip=u"1 回目が落ちるフレーム"),
              Param("interval", u"間隔 (フレーム)", 30.0, minimum=1.0, step=5.0, decimals=1,
@@ -97,8 +134,9 @@ class LightningAnimeTool(BaseTool):
     tab = TAB
     category = CATEGORY
     order = 885
-    tooltip = (u"雲の点から地面へ、大きくジグザグに折れた太い稲妻が何回か落ちます (真ん中に白い芯)。\n"
-               u"オブジェクトを選んでいれば、そこへ落ちます。カメラを選んでいれば、帯はそのカメラを向きます。")
+    tooltip = (u"雲の点から地面へ、大きくジグザグに折れた太い円柱の稲妻が何回か落ちます (真ん中に白い芯)。\n"
+               u"円柱なので、真上・真下から見ても太さがあり、パースが付きます。\n"
+               u"オブジェクトを選んでいれば、そこへ落ちます。")
     params = _params(False)
 
     def run(self, ctx, **v):
@@ -195,9 +233,30 @@ def _main_point(style, kv, n, dst):
         u"{d} = $t0 + ($g0 - $t0) * $u + $A * ($oa * $jagM) + $B * ($ob * $jagM);\n}}\n".format(d=dst)
 
 
-def _rows_code(count, r, a):
+def _subdivide_code(style, count):
+    """アニメ: 点の列 $P / $W を辺ごとに ANIME_SUB に分ける (_subdivide と同じ)。行の数を返す。"""
+    if style != mo.STYLE_ANIME:
+        return u"", count
+    sub = mo.ANIME_SUB
+    code = u"""vector $Q[]; float $V[]; int $q = 0; int $s;
+for ($k = 0; $k < {last}; $k++) {{
+    for ($s = 0; $s < {sub}; $s++) {{
+        float $st = $s / {subf};
+        $Q[$q] = $P[$k] + ($P[$k + 1] - $P[$k]) * $st;
+        $V[$q] = $W[$k] + ($W[$k + 1] - $W[$k]) * $st;
+        $q++;
+    }}
+}}
+$Q[$q] = $P[{last}]; $V[$q] = $W[{last}];
+$P = $Q; $W = $V;
+""".format(last=count - 1, sub=sub, subf=repr(float(sub)))
+    return code, mo.strand_rows(style, count)
+
+
+def _rows_code(count, r, a, style=None):
     """$P[] / $W[] (count 個) → 行 (位置・軸・太さ) を $o に (_strand_rows と同じ)。"""
-    return u"""for ($j = 0; $j < {n}; $j++) {{
+    sub_code, count = _subdivide_code(style, count)
+    return sub_code + u"""for ($j = 0; $j < {n}; $j++) {{
     int $j0 = max(0, $j - 1);
     int $j1 = min({last}, $j + 1);
     vector $p = $P[$j];
@@ -233,7 +292,7 @@ for ($k = 0; $k < {n}; $k++) {{
     if ($c >= 0 && $k <= $last) $W[$k] = {r}.dfx_width * (1 - (1 - {r}.dfx_taper) * ($k / {n1}));
 }}
 for ($k = $last + 1; $k < {n}; $k++) $P[$k] = $P[$last];
-""".format(r=r, n=n, n1=repr(float(max(n - 1, 1)))) + _rows_code(n, r, 0)
+""".format(r=r, n=n, n1=repr(float(max(n - 1, 1)))) + _rows_code(n, r, 0, style)
     # 濃さ (lightning_alpha と同じ)
     code += u"""float $al = 0;
 if ($c >= 0) {{
@@ -243,10 +302,12 @@ if ($c >= 0) {{
     $al = {r}.dfx_opacity * $on * (1 - 0.5 * clamp(0, 1, ($f - $ts) / max({r}.dfx_duration, 0.01)));
 }}
 float $tb = 1 - $al;
-float $tg = 1 - $al * {r}.dfx_glow_opacity;
 {b}.outTransparencyR = $tb; {b}.outTransparencyG = $tb; {b}.outTransparencyB = $tb;
+""".format(r=r, h90=_hash("$c", "$ph", 90), b=wx.short(bolt_shader))
+    if glow_shader:
+        code += u"""float $tg = 1 - $al * {r}.dfx_glow_opacity;
 {g}.outTransparencyR = $tg; {g}.outTransparencyG = $tg; {g}.outTransparencyB = $tg;
-""".format(r=r, h90=_hash("$c", "$ph", 90), b=wx.short(bolt_shader), g=wx.short(glow_shader))
+""".format(r=r, g=wx.short(glow_shader))
     return code
 
 
@@ -281,7 +342,7 @@ if ($c >= 0) {{
     }}
     for ($j = $blast + 1; $j < {m}; $j++) $P[$j] = $P[$blast];
 }}
-""".format(r=r, m=m) + _rows_code(m, r, 0)
+""".format(r=r, m=m) + _rows_code(m, r, 0, style)
     return code
 
 
@@ -295,12 +356,24 @@ def _ribbon(cmds, mu, root, name, joints, strands, half, z, owned):
             if j < count - 1:
                 faces.append([2 * k, 2 * k + 1, 2 * k + 3, 2 * k + 2])
             k += 1
+    return _skinned(cmds, name, root, joints, points, faces, 2, owned)
+
+
+def _tube(cmds, mu, root, name, joints, strands, sides, owned):
+    """ジョイントにスキンした円柱 (点ごとに sides 頂点の輪。両端はふた)。"""
+    ring = tube_ring(sides)
+    points = [(float(k) + x, y, z) for k in range(len(joints)) for x, y, z in ring]
+    return _skinned(cmds, name, root, joints, points, tube_faces(strands, sides), sides, owned)
+
+
+def _skinned(cmds, name, root, joints, points, faces, per, owned):
     mesh = wx.make_mesh(cmds, name, root, points, faces)
     owned.append(mesh)
     skin = cmds.skinCluster(joints, mesh, toSelectedBones=True, bindMethod=0, maximumInfluences=1,
                             normalizeWeights=1, name=name + "_skin")[0]
     for i, jnt in enumerate(joints):
-        cmds.skinPercent(skin, "%s.vtx[%d:%d]" % (mesh, 2 * i, 2 * i + 1), transformValue=[(jnt, 1.0)])
+        cmds.skinPercent(skin, "%s.vtx[%d:%d]" % (mesh, per * i, per * i + per - 1),
+                         transformValue=[(jnt, 1.0)])
     owned.append(skin)
     return mesh
 
@@ -310,7 +383,8 @@ def build(cmds, mu, root, v, style):
     owned = []
     wx.track_links(cmds, mu, root, owned)
     n, m, nb = int(v["segments"]), int(v["branch_segments"]), int(v["branches"])
-    strands = [n] + [m] * nb
+    rn, rm = mo.strand_rows(style, n), mo.strand_rows(style, m)
+    strands = [rn] + [rm] * nb
     jgrp = cmds.ls(cmds.group(empty=True, name=prefix + "_joints", parent=root), long=True)[0]
     owned.append(jgrp)
     joints = []
@@ -319,11 +393,14 @@ def build(cmds, mu, root, v, style):
         cmds.setAttr(jnt + ".translate", float(k), 0, 0, type="double3")
         cmds.setAttr(jnt + ".drawStyle", 2)
         joints.append(cmds.ls(jnt, long=True)[0])
-    glow = v["glow_width"]
-    bolt = _ribbon(cmds, mu, root, prefix + "_bolt", joints, strands, 0.5, 0.0, owned)
-    second = _ribbon(cmds, mu, root, prefix + "_glow", joints, strands, 0.5 * glow,
-                     -0.05 if glow >= 1 else 0.05, owned)
     plug = "%s.%s" % (root, mu.PARAM_PREFIX)
+    if style == mo.STYLE_ANIME:
+        # 円柱 (どこから見ても太さがある) + 円柱の表面のすぐ前に、カメラを向いた芯の帯
+        bolt = _tube(cmds, mu, root, prefix + "_bolt", joints, strands, int(v["sides"]), owned)
+    else:
+        bolt = _ribbon(cmds, mu, root, prefix + "_bolt", joints, strands, 0.5, 0.0, owned)
+    half, z = second_ribbon(style, v["glow_width"])
+    second = _ribbon(cmds, mu, root, prefix + "_glow", joints, strands, half, z, owned)
     shaders = []
     for mesh, color in ((bolt, "color"), (second, "glow_color")):
         shader, sg = mu.create_surface_shader(wx.short(mesh) + "_mat", (1, 1, 1), 1.0)
@@ -334,25 +411,25 @@ def build(cmds, mu, root, v, style):
     outputs = wx.TRANSFORM_OUTPUTS[:9]
     owned.append(cmds.expression(name=prefix + "_main", alwaysEvaluate=True, unitConversion="all",
                                  string=_main_expression(style, root, n, shaders[0], shaders[1])
-                                 + wx.mel_writes(joints[:n], outputs)))
+                                 + wx.mel_writes(joints[:rn], outputs)))
     for br in range(nb):
-        js = joints[n + br * m:n + (br + 1) * m]
+        js = joints[rn + br * rm:rn + (br + 1) * rm]
         owned.append(cmds.expression(name="%s_branch_%02d" % (prefix, br + 1), alwaysEvaluate=True,
                                      unitConversion="all",
                                      string=_branch_expression(style, root, n, m, br) + wx.mel_writes(js, outputs)))
     wx.finish(cmds, mu, root, owned)
 
 
-def _live(tool):
-    return tuple(p.name for p in tool.params if p.name not in REBUILD and p.name not in CREATE_ONLY)
+def _live(tool, rebuild):
+    return tuple(p.name for p in tool.params if p.name not in rebuild and p.name not in CREATE_ONLY)
 
 
 REAL = wx.register(wx.Kind("lightning_real", LightningRealTool, "dfx_lightning#", u"稲妻 (実写)",
-                           _live(LightningRealTool), REBUILD,
+                           _live(LightningRealTool, REBUILD), REBUILD,
                            build=lambda cmds, mu, root, v: build(cmds, mu, root, v, mo.STYLE_REAL),
                            create=_create_points, need_camera=True, need_wind=False))
 ANIME = wx.register(wx.Kind("lightning_anime", LightningAnimeTool, "dfx_lightningAnime#", u"稲妻 (アニメ)",
-                            _live(LightningAnimeTool), REBUILD,
+                            _live(LightningAnimeTool, ANIME_REBUILD), ANIME_REBUILD,
                             build=lambda cmds, mu, root, v: build(cmds, mu, root, v, mo.STYLE_ANIME),
                             create=_create_points, need_camera=True, need_wind=False))
 STYLES = {"lightning_real": mo.STYLE_REAL, "lightning_anime": mo.STYLE_ANIME}
