@@ -438,6 +438,7 @@ $o[$ob + 9] = $vis;
 
 def _puff_mesh(cmds, name, parent):
     """丸を 5 つ集めた、もこもこの塊 (大きさ約 1)。"""
+    groups_before = set(cmds.ls(type="groupId"))
     parts = []
     for x, y, z, r in ((0, 0, 0, 0.42), (0.28, -0.05, 0.1, 0.3), (-0.27, -0.04, -0.08, 0.3),
                        (0.05, 0.22, -0.05, 0.3), (-0.05, -0.02, 0.3, 0.26)):
@@ -454,11 +455,21 @@ def _puff_mesh(cmds, name, parent):
     shape = cmds.listRelatives(merged, shapes=True, fullPath=True)[0]
     for a in ("castsShadows", "receiveShadows"):
         cmds.setAttr(shape + "." + a, 0)
+    # 結合で面ごとの割り当て用の groupId ができ、作り直すたびに残ってしまうので、
+    # 物体ごとの割り当てにしてから消す (マテリアルは後で割り当てる)
+    cmds.sets(merged, edit=True, forceElement="initialShadingGroup")
+    leftover = [g for g in set(cmds.ls(type="groupId")) - groups_before if cmds.objExists(g)]
+    if leftover:
+        cmds.delete(leftover)
     return merged
 
 
-def _toon_shader(cmds, mu, root, name, owned):
-    """アニメ調の 2 色 (正面は色、ふちは影の色) のマテリアル。ライトが無くても形が分かる。"""
+def _toon_shader(cmds, mu, root, name, owned, color="color", shade="shade_color",
+                 opacity="opacity"):
+    """アニメ調の 2 色 (正面は色、ふちは影の色) のマテリアル。ライトが無くても形が分かる。
+
+    color / shade / opacity はルートのパラメータ名 (dfx_ を除く)。
+    """
     plug = "%s.%s" % (root, mu.PARAM_PREFIX)
     shader, sg = mu.create_surface_shader(name, (1, 1, 1))
     info = cmds.shadingNode("samplerInfo", asUtility=True, name=name + "_facing")
@@ -466,14 +477,13 @@ def _toon_shader(cmds, mu, root, name, owned):
     cmds.setAttr(ramp + ".type", 0)            # V ランプ
     cmds.setAttr(ramp + ".interpolation", 0)   # なし (くっきり 2 色)
     cmds.connectAttr(info + ".facingRatio", ramp + ".vCoord")
-    for idx, pos, color in ((0, 0.0, "shade_color"), (1, 0.45, "color")):
+    for idx, pos, name_ in ((0, 0.0, shade), (1, 0.45, color)):
         cmds.setAttr("%s.colorEntryList[%d].position" % (ramp, idx), pos)
-        cmds.connectAttr(plug + color, "%s.colorEntryList[%d].color" % (ramp, idx))
-    cmds.connectAttr(wx.premultiply(cmds, ramp + ".outColor", plug + "opacity", name + "_premult",
-                                    owned), shader + ".outColor", force=True)
+        cmds.connectAttr(plug + name_, "%s.colorEntryList[%d].color" % (ramp, idx))
+    cmds.connectAttr(ramp + ".outColor", shader + ".outColor", force=True)
     inv = cmds.createNode("reverse", name=name + "_transparency")
     for axis in "XYZ":
-        cmds.connectAttr(plug + "opacity", inv + ".input" + axis)
+        cmds.connectAttr(plug + opacity, inv + ".input" + axis)
     cmds.connectAttr(inv + ".output", shader + ".outTransparency", force=True)
     owned.extend([shader, sg, info, ramp, inv])
     return sg

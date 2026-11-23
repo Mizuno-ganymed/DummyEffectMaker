@@ -428,12 +428,19 @@ def create_emitter(cmds, mu, root, target):
     return loc
 
 
-def make_instances(cmds, root, src, name, count, owned):
-    """src のインスタンスを count 個、ルートの子のグループに作る。"""
+def make_instances(cmds, root, src, name, count, owned, copies=False):
+    """src のインスタンスを count 個、ルートの子のグループに作る。
+
+    copies=True ならインスタンスではなく別々のメッシュ (板ごとに違うマテリアルを付ける時。
+    インスタンスごとにマテリアルを変えると Arnold では表示されない)。
+    """
     grp = cmds.group(empty=True, name=name, parent=root)
     grp = cmds.ls(grp, long=True)[0]
     owned.append(grp)
-    nodes = [cmds.instance(src, name="%s_%03d" % (name, i + 1))[0] for i in range(count)]
+    if copies:
+        nodes = [cmds.duplicate(src, name="%s_%03d" % (name, i + 1))[0] for i in range(count)]
+    else:
+        nodes = [cmds.instance(src, name="%s_%03d" % (name, i + 1))[0] for i in range(count)]
     if nodes:
         cmds.parent(nodes, grp)  # 1 つずつ親を変えると遅いので、まとめて
     return cmds.listRelatives(grp, children=True, fullPath=True) or []
@@ -502,30 +509,22 @@ def chunked_expressions(cmds, root, name, nodes, outputs, head, body, owned):
     return exprs
 
 
-def premultiply(cmds, color_plug, opacity_plug, name, owned):
-    """色 × 不透明度 (blendColors) の出力プラグ。
-
-    surfaceShader の outColor は不透明度を掛けた色 (乗算済み) にする。掛けないと、半透明の所で
-    後ろの色に足されて明るくなる (霧が真っ白になる)。テクスチャ (file) の色は元から乗算済み。
-    """
-    from . import _maya_utils as mu
-    return mu.premultiply(color_plug, opacity_plug, name, owned)
-
-
 def flat_shader(cmds, mu, root, name, owned, color_attr="color", opacity_attr="opacity"):
-    """ライティングの影響を受けない単色のマテリアル (色・不透明度はルートとつなぐ)。"""
+    """ライティングの影響を受けない単色のマテリアル (色・不透明度はルートとつなぐ)。
+
+    半透明でも色は「色そのまま」(不透明度を掛けない)。ビューポート (Viewport 2.0)・
+    Hardware 2.0・Arnold は、色 × 不透明度 + 後ろ × (1 - 不透明度) で重ねるため。
+    (Maya Software だけは色に不透明度を掛けておく決まりなので、半透明の所が明るく出る)
+    """
     plug = "%s.%s" % (root, mu.PARAM_PREFIX)
     shader, sg = mu.create_surface_shader(name, (1, 1, 1))
+    cmds.connectAttr(plug + color_attr, shader + ".outColor", force=True)
     if opacity_attr:
-        cmds.connectAttr(premultiply(cmds, plug + color_attr, plug + opacity_attr,
-                                     name + "_premult", owned), shader + ".outColor", force=True)
         inv = cmds.createNode("reverse", name=name + "_transparency")
         for axis in "XYZ":
             cmds.connectAttr(plug + opacity_attr, inv + ".input" + axis)
         cmds.connectAttr(inv + ".output", shader + ".outTransparency", force=True)
         owned.append(inv)
-    else:
-        cmds.connectAttr(plug + color_attr, shader + ".outColor", force=True)
     owned.extend([shader, sg])
     return shader, sg
 
@@ -534,7 +533,7 @@ def texture_shader(cmds, mu, root, name, texture, owned, color_attr="color", opa
     """テクスチャ (透明度付き PNG) を貼るマテリアル。色はテクスチャ × ルートの色。
 
     戻り値 (shader, sg, file, place2d)。不透明度は file.alphaGain で決める。
-    opacity_attr を渡すと、ルートの不透明度を alphaGain と色 (乗算済み) につなぐ。
+    opacity_attr を渡すと、ルートの不透明度を alphaGain につなぐ。
     color_attr が None なら色・濃さはつながない (エクスプレッションが colorGain / alphaGain を決める)。
     """
     shader, sg = mu.create_surface_shader(name, (1, 1, 1))
@@ -548,12 +547,10 @@ def texture_shader(cmds, mu, root, name, texture, owned, color_attr="color", opa
     cmds.connectAttr(place + ".outUvFilterSize", tex + ".uvFilterSize")
     cmds.setAttr(tex + ".fileTextureName", texture, type="string")
     plug = "%s.%s" % (root, mu.PARAM_PREFIX)
-    if color_attr and opacity_attr:
-        cmds.connectAttr(premultiply(cmds, plug + color_attr, plug + opacity_attr,
-                                     name + "_premult", owned), tex + ".colorGain")
-        cmds.connectAttr(plug + opacity_attr, tex + ".alphaGain")
-    elif color_attr:
+    if color_attr:
         cmds.connectAttr(plug + color_attr, tex + ".colorGain")
+    if color_attr and opacity_attr:
+        cmds.connectAttr(plug + opacity_attr, tex + ".alphaGain")
     cmds.connectAttr(tex + ".outColor", shader + ".outColor", force=True)
     cmds.connectAttr(tex + ".outTransparency", shader + ".outTransparency", force=True)
     owned.extend([shader, sg, place, tex])
@@ -807,6 +804,61 @@ def kind_of(cmds, mu, root):
     return KINDS[cmds.getAttr(root + "." + mu.EFFECT_TYPE_ATTR)]
 
 
+# 色・透明度をテクスチャ (画像・ランプ) で作る種類。ビューポートのテクスチャ表示が OFF だと黒くなる
+TEXTURED_TYPES = ("dust", "dust_mesh", "rain_far", "snow_far", "fog", "ground_fog", "ground_crawl")
+TEXTURE_HINT = (u"  ※ ビューポートのテクスチャ表示が OFF のため、黒く (不透明に) 表示されます。"
+                u"ビューポートで 6 キー (シェーディング → ハードウェアテクスチャリング) を押すと正しく表示されます")
+
+
+def panels_without_textures(cmds):
+    """テクスチャ表示が OFF の、表示中のビューポート (シェーディング表示のもの)。バッチでは空。"""
+    if cmds.about(batch=True):
+        return []
+    panels = []
+    for panel in cmds.getPanel(visiblePanels=True) or []:
+        if cmds.getPanel(typeOf=panel) != "modelPanel":
+            continue
+        if cmds.modelEditor(panel, query=True, displayAppearance=True) not in ("smoothShaded",
+                                                                               "flatShaded"):
+            continue
+        if not cmds.modelEditor(panel, query=True, displayTextures=True):
+            panels.append(panel)
+    return panels
+
+
+def warn_if_textures_hidden(cmds, ctx):
+    """テクスチャ表示が OFF のビューポートがあればログで知らせる。知らせたら True。"""
+    if panels_without_textures(cmds):
+        ctx.log(TEXTURE_HINT)
+        return True
+    return False
+
+
+# 半透明が見どころの種類。ハードウエアレンダリングの透明度が「アルファ カット」だと消える
+TRANSLUCENT_TYPES = ("rain", "rain_far", "snow_far", "fog", "fog_depth", "ground_fog",
+                     "ground_crawl")
+ALPHA_CUT = 5   # hardwareRenderingGlobals.transparencyAlgorithm の「アルファ カット」
+ALPHA_CUT_HINT = (u"  ※ ハードウエアレンダリングの透明度のアルゴリズムが「アルファ カット」のため、"
+                  u"半透明の部分がビューポートと Hardware 2.0 で消えます。"
+                  u"Viewport 2.0 の設定 (またはレンダー設定) で「オブジェクトのソート」にしてください "
+                  u"(Arnold には影響しません)")
+
+
+def alpha_cut_enabled(cmds):
+    try:
+        return cmds.getAttr("hardwareRenderingGlobals.transparencyAlgorithm") == ALPHA_CUT
+    except (RuntimeError, ValueError):
+        return False
+
+
+def warn_if_alpha_cut(cmds, ctx):
+    """透明度のアルゴリズムがアルファ カットならログで知らせる。知らせたら True。"""
+    if alpha_cut_enabled(cmds):
+        ctx.log(ALPHA_CUT_HINT)
+        return True
+    return False
+
+
 def create_effect(cmds, mu, ctx, v, kind):
     """天候を 1 つ作る (風・カメラ・選択したオブジェクトはこの時に決める)。"""
     camera = choose_camera(cmds, ctx) if kind.need_camera else None
@@ -827,6 +879,10 @@ def create_effect(cmds, mu, ctx, v, kind):
         kind.create(cmds, mu, root, v, camera=camera, target=target)
     kind.build(cmds, mu, root, v)
     log_effect(ctx, cmds, root, kind, camera, wind, target)
+    if kind.effect_type in TEXTURED_TYPES:
+        warn_if_textures_hidden(cmds, ctx)
+    if kind.effect_type in TRANSLUCENT_TYPES:
+        warn_if_alpha_cut(cmds, ctx)
     cmds.select(root)
     return root
 

@@ -113,6 +113,12 @@ class BakeTool(BaseTool):
                              simulation=True, disableImplicitControl=True,
                              preserveOutsideKeys=False, sparseAnimCurveBake=False,
                              minimizeRotation=True)
+        # 爆発で隠した弾: 弾の visibility も一緒にベイクした時は、visibility のキーにまとめる
+        baked_vis = set(cmds.ls(p.rsplit(".", 1)[0], long=True)[0] for p in plugs
+                        if p.endswith(".visibility") and cmds.objExists(p))
+        for node in sorted(set(p.rsplit(".", 1)[0] for p in plugs if p.endswith(".lodVisibility"))):
+            if cmds.objExists(node) and cmds.ls(node, long=True)[0] in baked_vis:
+                fold_lod_visibility(cmds, node)
         if hidden_nodes:
             zeroed = sum(zero_scale_while_hidden(cmds, n) for n in hidden_nodes)
             ctx.log(u"  非表示の間のスケールを 0 にしました (%d 個 / のべ %d フレーム)"
@@ -164,9 +170,30 @@ def driven_plugs(cmds, root):
         for plug in cmds.listConnections(expr, source=False, destination=True, plugs=True,
                                          skipConversionNodes=True) or []:
             if (cmds.nodeType(plug.split(".")[0]) in EXPRESSION_BAKE_NODE_TYPES
-                    and plug not in plugs):
+                    or plug.endswith(".lodVisibility")) and plug not in plugs:
+                # lodVisibility: 爆発が隠している、当たった弾 (別のルートの物)
                 plugs.append(plug)
     return plugs
+
+
+def fold_lod_visibility(cmds, node):
+    """ベイクした lodVisibility (当たった弾を隠す) を visibility のキーにまとめる (FBX 用)。
+
+    visibility もキーになっている時だけ。まとめたら lodVisibility のキーは消して 1 に戻す。
+    """
+    lod = node + ".lodVisibility"
+    vis = node + ".visibility"
+    times = cmds.keyframe(lod, query=True, timeChange=True) or []
+    if not times or not cmds.listConnections(vis, source=True, destination=False,
+                                             type="animCurve"):
+        return False
+    values = [cmds.getAttr(lod, time=t) for t in times]
+    shown = [cmds.getAttr(vis, time=t) for t in times]
+    cmds.cutKey(lod)
+    cmds.setAttr(lod, True)
+    for t, a, b in zip(times, values, shown):
+        cmds.setKeyframe(vis, time=t, value=float(bool(a) and bool(b)))
+    return True
 
 
 def _blend_shapes(cmds, root):

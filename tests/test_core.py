@@ -14,9 +14,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dummy_effect_maker.core import BaseTool, Param, ToolContext, ToolError, execute  # noqa: E402
 from dummy_effect_maker.core import host, presets, registry, settings  # noqa: E402
-from dummy_effect_maker.tools import (camera_shake, energy_ball, focus_lines,  # noqa: E402
-                                      ghost_blur, hand_shake, homing, shockwave, speed_lines,
-                                      vulcan, weather, weather_layers, wind)
+from dummy_effect_maker.tools import (camera_shake, energy_ball, explosion,  # noqa: E402
+                                      focus_lines, ghost_blur, hand_shake, homing, shockwave,
+                                      speed_lines, vulcan, weather, weather_layers, wind)
 from dummy_effect_maker.tools import _weather as wx  # noqa: E402
 
 
@@ -142,7 +142,10 @@ def test_tools_are_grouped_into_tabs():
     tools = registry.discover("dummy_effect_maker.tools")
     tabs = [(tab, [t.label for t in ts]) for tab, ts in registry.group_by_tab(tools)]
     assert [tab for tab, _ in tabs] == [u"ツール", u"カメラ", u"エネルギー弾", u"衝撃波", u"お化けブラー",
-                                        u"天候"]
+                                        u"天候", u"爆発"]
+    assert dict(tabs)[u"爆発"] == [
+        u"コリジョンに指定", u"コリジョンを解除", u"爆発", u"爆発を更新", u"爆発を外す",
+        u"爆発のパラメータを保存", u"爆発のパラメータを読み込み"]
     assert dict(tabs)[u"天候"] == [
         u"風", u"風を更新", u"雨 (線と跳ね)", u"雨 (遠景の筒)", u"雪 (粒)", u"雪 (遠景の筒)",
         u"土煙 (スプライト)", u"土煙 (もこもこ)", u"火花 (線)", u"火花 (尾を引く)",
@@ -882,6 +885,61 @@ def test_weather_layer_helpers():
     assert len(pts) == 16 and len(faces) == 8 and len(uvs) == 18 and max(uv_ids) == 17
 
 
+class _FakePanelCmds(object):
+    """ビューポートの問い合わせだけを真似る cmds。"""
+
+    def __init__(self, panels, batch=False):
+        self.panels = panels   # {名前: (種類, 表示, テクスチャ表示)}
+        self.batch = batch
+
+    def about(self, batch=False):
+        return self.batch
+
+    def getPanel(self, visiblePanels=False, typeOf=None):
+        if typeOf:
+            return self.panels[typeOf][0]
+        return list(self.panels)
+
+    def modelEditor(self, panel, query=True, displayAppearance=False, displayTextures=False):
+        kind, appearance, textures = self.panels[panel]
+        return appearance if displayAppearance else textures
+
+
+def test_warns_when_viewport_textures_are_off():
+    logs = []
+    ctx = ToolContext(None, log=logs.append)
+    on = _FakePanelCmds({"modelPanel4": ("modelPanel", "smoothShaded", True),
+                         "outlinerPanel1": ("outlinerPanel", None, None)})
+    assert not wx.warn_if_textures_hidden(on, ctx) and not logs
+    off = _FakePanelCmds({"modelPanel4": ("modelPanel", "smoothShaded", False)})
+    assert wx.panels_without_textures(off) == ["modelPanel4"]
+    assert wx.warn_if_textures_hidden(off, ctx) and u"6 キー" in logs[-1]
+    wire = _FakePanelCmds({"modelPanel4": ("modelPanel", "wireframe", False)})
+    assert wx.panels_without_textures(wire) == []          # ワイヤーフレーム表示なら関係ない
+    batch = _FakePanelCmds({"modelPanel4": ("modelPanel", "smoothShaded", False)}, batch=True)
+    assert wx.panels_without_textures(batch) == []
+    assert set(wx.TEXTURED_TYPES) <= set(wx.KINDS)
+
+
+class _FakeAlgoCmds(object):
+    def __init__(self, value):
+        self.value = value
+
+    def getAttr(self, plug):
+        if self.value is None:
+            raise RuntimeError("no node")
+        return self.value
+
+
+def test_warns_when_transparency_is_alpha_cut():
+    logs = []
+    ctx = ToolContext(None, log=logs.append)
+    assert not wx.warn_if_alpha_cut(_FakeAlgoCmds(1), ctx) and not logs     # オブジェクトのソート
+    assert not wx.warn_if_alpha_cut(_FakeAlgoCmds(None), ctx)                # ノードが無い
+    assert wx.warn_if_alpha_cut(_FakeAlgoCmds(5), ctx) and u"アルファ カット" in logs[-1]
+    assert set(wx.TRANSLUCENT_TYPES) <= set(wx.KINDS)
+
+
 def test_file_param_and_weather_texture_option():
     p = Param("t", "t", "", kind="file")
     assert p.coerce(None) == "" and p.coerce("C:/a.png") == "C:/a.png"
@@ -901,3 +959,18 @@ def test_file_param_roundtrips_in_presets():
         path = os.path.join(d, "p.json")
         presets.save_preset(path, "dust", params, {"texture": u"D:/絵/煙.png", "n": 3})
         assert presets.load_preset(path, "dust", params) == {"texture": u"D:/絵/煙.png", "n": 3}
+
+
+def test_explosion_params_are_live_or_rebuild():
+    names = sorted(p.name for p in explosion.ExplosionTool.params)
+    assert sorted(explosion.LIVE_PARAMS + explosion.REBUILD_PARAMS) == names
+    assert not set(explosion.LIVE_PARAMS) & set(explosion.REBUILD_PARAMS)
+
+
+def test_explosion_hit_helpers():
+    assert explosion.sample_times(1, 3, 2) == [1.0, 1.5, 2.0, 2.5, 3.0]
+    assert _close(explosion.segment_param((0, 0, 0), (10, 0, 0), (2.5, 1, 0)), 0.25)
+    assert explosion.segment_param((0, 0, 0), (0, 0, 0), (1, 1, 1)) == 0.0
+    assert explosion.BULLET_NAME.search("dfx_vulcan1_bullet_003")
+    assert explosion.BULLET_NAME.search("dfx_energy1_ball_02")
+    assert not explosion.BULLET_NAME.search("dfx_homing1_bulletSrc")

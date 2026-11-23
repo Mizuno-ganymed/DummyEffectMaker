@@ -151,7 +151,7 @@ float $side = dot($Dnow * $wf, $right);
     {pl}.offsetV = {r}.dfx_speed * frame / ($tile * {aspect}) + {hv};
     float $op = {r}.dfx_opacity_near + ({r}.dfx_opacity_far - {r}.dfx_opacity_near) * {ratio};
     {tx}.alphaGain = $op;
-    {tx}.colorGainR = {r}.dfx_colorR * $op; {tx}.colorGainG = {r}.dfx_colorG * $op; {tx}.colorGainB = {r}.dfx_colorB * $op;
+    {tx}.colorGainR = {r}.dfx_colorR; {tx}.colorGainG = {r}.dfx_colorG; {tx}.colorGainB = {r}.dfx_colorB;
 }}
 """.format(k=k, aspect=repr(aspect), c=wx.short(cyl), pl=wx.short(place), tx=wx.short(tex),
            r=r, ratio=repr(ratio), ho=H(k, 0, 1), hv=H(k, 0, 2),
@@ -223,10 +223,11 @@ def build_cards(cmds, mu, root, v):
     pts, faces, uvs = wx.card_points()
     src = wx.make_mesh(cmds, prefix + "_cardSrc", src_grp, pts, faces, uvs)
     cmds.setAttr(src_grp + ".visibility", 0)
-    cards = wx.make_instances(cmds, root, src, prefix + "_cards", count, owned)
+    # 板ごとにマテリアル (濃さ) が違うので、インスタンスではなく別々のメッシュにする
+    cards = wx.make_instances(cmds, root, src, prefix + "_cards", count, owned, copies=True)
     texes = []
     for i, card in enumerate(cards):
-        # 板ごとに濃さが違うので、マテリアルも板ごと (インスタンスは面ではなく transform に割り当てる)
+        # 板ごとに濃さが違うので、マテリアルも板ごと
         shader, sg, tex, _ = wx.texture_shader(cmds, mu, root, "%s_card_%03d_mat" % (prefix, i + 1),
                                                texture, owned, color_attr=None)
         cmds.sets(card, edit=True, forceElement=sg)
@@ -254,8 +255,8 @@ vector $S = <<$sz, $sz * {r}.dfx_squash, $sz>>;
         code += wx.mel_billboard("$p", u"({h} - 0.5) * 360 * pow(min(1, {r}.dfx_squash), 4) + {r}.dfx_spin * frame"
                                  .format(h=H("$i", 0, 5), r=r))
         code += wx.mel_store_transform(a).replace("* 10;", "* %d;" % CARD_STRIDE) + (
-            u"$o[$ob + 10] = $alpha; $o[$ob + 11] = {r}.dfx_colorR * $alpha;\n"
-            u"$o[$ob + 12] = {r}.dfx_colorG * $alpha; $o[$ob + 13] = {r}.dfx_colorB * $alpha;\n"
+            u"$o[$ob + 10] = $alpha; $o[$ob + 11] = {r}.dfx_colorR;\n"
+            u"$o[$ob + 12] = {r}.dfx_colorG; $o[$ob + 13] = {r}.dfx_colorB;\n"
             .format(r=r))
         return code
 
@@ -330,7 +331,7 @@ float $d0 = {r}.dfx_start;
 float $d1 = max({r}.dfx_end, $d0 + 0.001);
 float $alpha = 1 - pow(1 - min({r}.dfx_density, 0.999), 1.0 / $n);
 {sh}.outTransparencyR = 1 - $alpha; {sh}.outTransparencyG = 1 - $alpha; {sh}.outTransparencyB = 1 - $alpha;
-{sh}.outColorR = {r}.dfx_colorR * $alpha; {sh}.outColorG = {r}.dfx_colorG * $alpha; {sh}.outColorB = {r}.dfx_colorB * $alpha;
+{sh}.outColorR = {r}.dfx_colorR; {sh}.outColorG = {r}.dfx_colorG; {sh}.outColorB = {r}.dfx_colorB;
 """.format(cs=wx.short(cam_shape), n=layers, r=r, sh=wx.short(shader))]
     for k, plane in enumerate(planes):
         t = k / float(max(layers - 1, 1))
@@ -392,8 +393,7 @@ def build_ground_fog(cmds, mu, root, v):
         plane = wx.make_mesh(cmds, name, area, pts, [[0, 1, 2, 3]], uvs)
         cmds.setAttr(plane + ".translateY", -0.5 + (k + 0.5) / layers)
         shader, sg = mu.create_surface_shader(name + "_mat", (1, 1, 1))
-        # 霧の模様 (流れる) × 端が消えるボックスランプ (流れない) = 濃さ
-        # 色も同じ形のランプ (中は 色 × 濃さ) で作る (乗算済みの色)
+        # 霧の模様 (流れる) × 端が消えるボックスランプ (流れない) = 濃さ。色はルートの色そのまま
         place = cmds.shadingNode("place2dTexture", asUtility=True, name=name + "_place")
         tex = cmds.shadingNode("file", asTexture=True, name=name + "_file")
         cmds.connectAttr(place + ".outUV", tex + ".uvCoord")
@@ -405,23 +405,21 @@ def build_ground_fog(cmds, mu, root, v):
         mask = cmds.shadingNode("ramp", asTexture=True, name=name + "_mask")
         cmds.connectAttr(mask_place + ".outUV", mask + ".uvCoord")
         cmds.connectAttr(mask_place + ".outUvFilterSize", mask + ".uvFilterSize")
-        tint = cmds.shadingNode("ramp", asTexture=True, name=name + "_tint")
-        cmds.connectAttr(mask_place + ".outUV", tint + ".uvCoord")
-        cmds.connectAttr(mask_place + ".outUvFilterSize", tint + ".uvFilterSize")
-        for ramp in (mask, tint):
-            cmds.setAttr(ramp + ".type", 5)            # ボックスランプ (中心 0 → 端 1)
-            cmds.setAttr(ramp + ".interpolation", 1)   # 直線
-            for idx, pos in ((0, 0.0), (1, 0.7), (2, 1.0)):
-                cmds.setAttr("%s.colorEntryList[%d].position" % (ramp, idx), pos)
-            cmds.setAttr("%s.colorEntryList[2].color" % ramp, 0, 0, 0, type="double3")
-            cmds.connectAttr(tex + ".outColor", ramp + ".colorGain")
+        cmds.setAttr(mask + ".type", 5)            # ボックスランプ (中心 0 → 端 1)
+        cmds.setAttr(mask + ".interpolation", 1)   # 直線
+        for idx, pos in ((0, 0.0), (1, 0.7), (2, 1.0)):
+            cmds.setAttr("%s.colorEntryList[%d].position" % (mask, idx), pos)
+        cmds.setAttr("%s.colorEntryList[2].color" % mask, 0, 0, 0, type="double3")
+        cmds.connectAttr(tex + ".outAlpha", mask + ".colorGainR")
+        cmds.connectAttr(tex + ".outAlpha", mask + ".colorGainG")
+        cmds.connectAttr(tex + ".outAlpha", mask + ".colorGainB")
         inv = cmds.createNode("reverse", name=name + "_transparency")
         cmds.connectAttr(mask + ".outColor", inv + ".input")
         cmds.connectAttr(inv + ".output", shader + ".outTransparency", force=True)
-        cmds.connectAttr(tint + ".outColor", shader + ".outColor", force=True)
+        cmds.connectAttr("%s.%scolor" % (root, mu.PARAM_PREFIX), shader + ".outColor", force=True)
         cmds.sets(plane, edit=True, forceElement=sg)
-        owned.extend([plane, shader, sg, place, tex, mask_place, mask, tint, inv])
-        items.append((plane, place, mask, tint))
+        owned.extend([plane, shader, sg, place, tex, mask_place, mask, inv])
+        items.append((plane, place, mask))
     r = prefix
     code = [wx.mel_head(root), _area_head(root), u"""float $sw = mag(<<$am[0], $am[1], $am[2]>>);
 float $sdp = mag(<<$am[8], $am[9], $am[10]>>);
@@ -433,7 +431,7 @@ float $du = dot($dw, $ax);
 float $dv = -dot($dw, $az);
 float $edge = clamp(0.0, 0.99, 1 - {r}.dfx_edge);
 """.format(r=r)]
-    for k, (plane, place, mask, tint) in enumerate(items):
+    for k, (plane, place, mask) in enumerate(items):
         code.append(u"""{{
     float $a = {r}.dfx_opacity * pow(1 - {k} / {n}, {r}.dfx_falloff);
     {pl}.repeatU = $sw / $tile; {pl}.repeatV = $sdp / $tile;
@@ -442,12 +440,9 @@ float $edge = clamp(0.0, 0.99, 1 - {r}.dfx_edge);
     {m}.colorEntryList[0].colorR = $a; {m}.colorEntryList[0].colorG = $a; {m}.colorEntryList[0].colorB = $a;
     {m}.colorEntryList[1].colorR = $a; {m}.colorEntryList[1].colorG = $a; {m}.colorEntryList[1].colorB = $a;
     {m}.colorEntryList[1].position = $edge;
-    {t}.colorEntryList[0].colorR = {r}.dfx_colorR * $a; {t}.colorEntryList[0].colorG = {r}.dfx_colorG * $a; {t}.colorEntryList[0].colorB = {r}.dfx_colorB * $a;
-    {t}.colorEntryList[1].colorR = {r}.dfx_colorR * $a; {t}.colorEntryList[1].colorG = {r}.dfx_colorG * $a; {t}.colorEntryList[1].colorB = {r}.dfx_colorB * $a;
-    {t}.colorEntryList[1].position = $edge;
 }}
 """.format(r=r, k=k, n=repr(float(layers)), pl=wx.short(place), m=wx.short(mask),
-           t=wx.short(tint), h1=H(k, 0, 1), h2=H(k, 0, 2)))
+           h1=H(k, 0, 1), h2=H(k, 0, 2)))
     owned.append(cmds.expression(name=prefix + "_layers", alwaysEvaluate=True,
                                  unitConversion="all", string=u"".join(code)))
     wx.finish(cmds, mu, root, owned)

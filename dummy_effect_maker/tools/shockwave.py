@@ -144,6 +144,8 @@ class ShockwaveTool(BaseTool):
         build_effect(cmds, mu, root, v, center, edge)
         cmds.select(root)
         _log(ctx, root, v, center, edge)
+        from . import _weather as wx
+        wx.warn_if_alpha_cut(cmds, ctx)
         return root
 
 
@@ -308,9 +310,7 @@ def build_effect(cmds, mu, root, v, center, edge):
     owned.extend([mm, dm])
 
     shader, sg = mu.create_surface_shader(prefix + "_mat", v["color"], 1.0 - v["opacity"])
-    # 色は 色 × 不透明度 (乗算済み)。半透明の所が後ろの色に足されて明るくならないように
-    cmds.connectAttr(mu.premultiply(attr("color"), attr("opacity"), prefix + "_premult", owned),
-                     shader + ".outColor", force=True)
+    cmds.connectAttr(attr("color"), shader + ".outColor", force=True)
     inv = cmds.createNode("reverse", name=prefix + "_transparency")
     for axis in "XYZ":
         cmds.connectAttr(attr("opacity"), inv + ".input" + axis)
