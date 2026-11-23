@@ -85,6 +85,7 @@ class BaseTool(object):
     サブクラスで設定する属性:
         label     : ボタンに表示する名前 (必須。空のクラスは登録されない)
         tab       : ランチャー上部のタブ名
+        menu      : 指定するとタブではなく、上部のメニュー (例: "シーン") に入る
         category  : タブ内のグループ名
         tooltip   : ボタンのツールチップ
         order     : カテゴリ内の並び順 (小さいほど上)
@@ -95,6 +96,7 @@ class BaseTool(object):
 
     label = ""
     tab = u"ツール"
+    menu = None
     category = "その他"
     tooltip = ""
     order = 100

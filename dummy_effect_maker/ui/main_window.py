@@ -8,7 +8,7 @@ from ..core import ToolContext, ToolError, execute
 from ..core import registry
 from .param_dialog import ParamDialog
 from .qt import QtCore, QtWidgets
-from .settings_page import SettingsPage
+from .settings_page import SettingsDialog
 
 WINDOW_OBJECT_NAME = "DummyEffectMakerMainWindow"
 WINDOW_TITLE = "Dummy Effect Maker"
@@ -26,16 +26,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
         self.resize(320, 480)
 
-        self._build_menu()
-
         self.log_view = QtWidgets.QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(1000)
 
-        # 上部のタブ: ツールの tab ごと (ツール / カメラ ...) + 環境設定
+        # 上部のタブ: ツールの tab ごと (ツール / カメラ ...)
         self.tabs = QtWidgets.QTabWidget()
         self.tool_areas = {}  # タブ名 → ボタンを並べるウィジェット
-        self.settings_page = SettingsPage(log=self.log)
+        self.menus = {}       # メニュー名 → QMenu (シーン / 開発)
+        # 環境設定はシーン メニューから開く小さなウインドウ
+        self.settings_dialog = SettingsDialog(log=self.log, parent=self)
+        self.settings_page = self.settings_dialog.page
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         splitter.addWidget(self.tabs)
@@ -49,13 +50,47 @@ class MainWindow(QtWidgets.QMainWindow):
         self.populate()
 
     # ------------------------------------------------------------------ UI
-    def _build_menu(self):
-        dev_menu = self.menuBar().addMenu(u"開発")
+    def _build_menus(self):
+        """上部のメニュー: menu を指定したツール (シーン: ベイク・全削除) + 環境設定 + 開発。"""
+        for name, tools in registry.group_by_menu(self.tools):
+            menu = self._menu(name)
+            for category, cat_tools in registry.group_by_category(tools):
+                if not menu.isEmpty():
+                    menu.addSeparator()
+                for tool in cat_tools:
+                    self._add_tool_actions(menu, tool)
+        scene = self._menu(u"シーン")
+        if not scene.isEmpty():
+            scene.addSeparator()
+        scene.addAction(u"環境設定 (プリセットの保存先)...", self.open_settings)
+        dev_menu = self._menu(u"開発")
         dev_menu.addAction(u"ツールを再読み込み", self._on_reload)
         dev_menu.addAction(u"ログをクリア", lambda: self.log_view.clear())
 
+    def _menu(self, name):
+        if name not in self.menus:
+            self.menus[name] = self.menuBar().addMenu(name)
+        return self.menus[name]
+
+    def _add_tool_actions(self, menu, tool):
+        available = tool.is_available(self.host.name)
+        action = menu.addAction(tool.label, lambda: self.run_tool(tool))
+        actions = [action]
+        if tool.params:
+            actions.append(menu.addAction(u"%s (オプション)..." % tool.label,
+                                          lambda: self.open_options(tool)))
+        for a in actions:
+            a.setToolTip(tool.tooltip)
+            a.setStatusTip(tool.tooltip.split("\n")[0])
+            a.setEnabled(available)
+        menu.setToolTipsVisible(True)
+
+    def open_settings(self):
+        self.settings_dialog.open_page()
+
     def populate(self):
         self.tools = registry.discover(TOOLS_PACKAGE, on_error=self._on_load_error)
+        self._build_menus()
         for tab, tab_tools in registry.group_by_tab(self.tools):
             area = QtWidgets.QWidget()
             layout = QtWidgets.QVBoxLayout(area)
@@ -71,8 +106,6 @@ class MainWindow(QtWidgets.QMainWindow):
             scroll.setWidget(area)
             self.tabs.addTab(scroll, tab)
             self.tool_areas[tab] = area
-        self.tabs.addTab(self.settings_page, u"環境設定")
-        self.tabs.currentChanged.connect(self._on_tab_changed)
         self.log(u"%d 個のツールを読み込みました (host: %s)"
                  % (len(self.tools), self.host.name))
 
@@ -123,11 +156,6 @@ class MainWindow(QtWidgets.QMainWindow):
         run_dialog = getattr(dialog, "exec", None) or dialog.exec_
         if run_dialog() == ParamDialog.APPLY:
             self.run_tool(tool)
-
-    def _on_tab_changed(self, index):
-        # 別のウインドウや手作業で設定ファイルが変わっていても最新を表示する
-        if self.tabs.widget(index) is self.settings_page:
-            self.settings_page.refresh()
 
     def _on_load_error(self, module_name, tb):
         self.log(u"ツール %s の読み込みに失敗しました\n%s" % (module_name, tb))

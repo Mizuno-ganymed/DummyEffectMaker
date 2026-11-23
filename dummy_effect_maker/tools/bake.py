@@ -18,7 +18,7 @@ BAKE_ATTRS = ("translateX", "translateY", "translateZ",
               "rotateX", "rotateY", "rotateZ",
               "scaleX", "scaleY", "scaleZ", "visibility")
 # トランスフォーム以外で、エクスプレッションが動かしていればベイクするノードの種類
-EXPRESSION_BAKE_NODE_TYPES = ("surfaceShader", "lattice")
+EXPRESSION_BAKE_NODE_TYPES = ("surfaceShader", "lattice", "file", "place2dTexture", "ramp")
 # ベイク後に不要になる (動きを作っていた) ノードの種類
 RIG_NODE_TYPES = ("motionPath", "condition", "multiplyDivide", "plusMinusAverage",
                   "decomposeMatrix", "polySphere", "parentConstraint",
@@ -27,6 +27,7 @@ RIG_NODE_TYPES = ("motionPath", "condition", "multiplyDivide", "plusMinusAverage
 
 class BakeTool(BaseTool):
     label = u"ベイク"
+    menu = u"シーン"
     category = u"シーン"
     order = 500
     tooltip = (u"作成したエフェクトの動きを毎フレームのキーにベイクします。\n"
@@ -154,7 +155,8 @@ def driven_plugs(cmds, root):
             plug = "%s.weight[%d]" % (bs, i)
             if cmds.listConnections(plug, source=True, destination=False):
                 plugs.append(plug)
-    # エクスプレッションが動かしているマテリアルの色 (残像) やラティスの点 (スミア)
+    # エクスプレッションが動かしているマテリアルの色 (残像)、ラティスの点 (スミア)、
+    # テクスチャの濃さ・流れ (天候)
     from . import _maya_utils as mu
     owned = cmds.listConnections(root + "." + mu.OWNED_ATTR, source=True,
                                  destination=False) or []

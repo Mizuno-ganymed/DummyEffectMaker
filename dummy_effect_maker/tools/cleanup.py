@@ -7,6 +7,7 @@ from ..core import BaseTool
 
 class DeleteAllDummiesTool(BaseTool):
     label = u"ダミーエフェクトを全削除"
+    menu = u"シーン"
     category = u"ユーティリティ"
     order = 900
     tooltip = u"Dummy Effect Maker で作成したノード (グループ・マテリアル等) を全て削除します。"

@@ -480,7 +480,9 @@ def build_camera_frame(cmds, root, prefix, camera, distance_plug, owned):
 def build_material(cmds, mu, prefix, attr, v, owned):
     """色・不透明度がルートのアトリビュートにつながったマテリアル。シェーディンググループを返す。"""
     shader, sg = mu.create_surface_shader(prefix + "_mat", v["color"], 1.0 - v["opacity"])
-    cmds.connectAttr(attr("color"), shader + ".outColor", force=True)
+    # 色は 色 × 不透明度 (乗算済み)。半透明の所が後ろの色に足されて明るくならないように
+    cmds.connectAttr(mu.premultiply(attr("color"), attr("opacity"), prefix + "_premult", owned),
+                     shader + ".outColor", force=True)
     inv = cmds.createNode("reverse", name=prefix + "_transparency")
     for axis in "XYZ":
         cmds.connectAttr(attr("opacity"), inv + ".input" + axis)

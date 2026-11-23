@@ -313,6 +313,21 @@ def create_surface_shader(name, color, transparency=0.0):
     return shader, sg
 
 
+def premultiply(color_plug, opacity_plug, name, owned):
+    """色 × 不透明度 (blendColors) の出力プラグ。作ったノードは owned に足す。
+
+    surfaceShader の outColor は不透明度を掛けた色 (乗算済み) にする決まり。掛けないと、
+    半透明の所で後ろの色に足されて明るくなる (白っぽく光る)。テクスチャ (file) の色は元から乗算済み。
+    """
+    blend = cmds.createNode("blendColors", name=name)
+    cmds.connectAttr(color_plug, blend + ".color1")
+    cmds.setAttr(blend + ".color2", 0, 0, 0, type="double3")
+    cmds.connectAttr(opacity_plug, blend + ".blender")
+    tag(blend)
+    owned.append(blend)
+    return blend + ".output"
+
+
 def resolve_transforms(names, count, label="ロケータ"):
     """names が全て空なら選択順で、全て指定されていればその名前で transform を返す。"""
     names = [n.strip() for n in names]

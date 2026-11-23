@@ -651,9 +651,9 @@ else if ($spd > $lo) $f = 1.0;
 float $a = {ratio};
 float $op = ({r}.dfx_opacity_start + ({r}.dfx_opacity_end - {r}.dfx_opacity_start) * $a) * $f;
 float $sc = 1.0 + ({r}.dfx_scale_end - 1.0) * $a;
-{sh}.outColorR = {r}.dfx_color_startR + ({r}.dfx_color_endR - {r}.dfx_color_startR) * $a;
-{sh}.outColorG = {r}.dfx_color_startG + ({r}.dfx_color_endG - {r}.dfx_color_startG) * $a;
-{sh}.outColorB = {r}.dfx_color_startB + ({r}.dfx_color_endB - {r}.dfx_color_startB) * $a;
+{sh}.outColorR = ({r}.dfx_color_startR + ({r}.dfx_color_endR - {r}.dfx_color_startR) * $a) * $op;
+{sh}.outColorG = ({r}.dfx_color_startG + ({r}.dfx_color_endG - {r}.dfx_color_startG) * $a) * $op;
+{sh}.outColorB = ({r}.dfx_color_startB + ({r}.dfx_color_endB - {r}.dfx_color_startB) * $a) * $op;
 {sh}.outTransparencyR = 1.0 - $op;
 {sh}.outTransparencyG = 1.0 - $op;
 {sh}.outTransparencyB = 1.0 - $op;
@@ -894,7 +894,10 @@ def build_trail(cmds, mu, root, v, target):
         ramps.append(ramp)
     owned.extend([shader, sg, place] + ramps)
     for idx, end in ((0, "start"), (1, "end")):
-        cmds.connectAttr(attr("color_" + end), "%s.colorEntryList[%d].color" % (ramps[0], idx))
+        # 色は 色 × 不透明度 (乗算済み)
+        cmds.connectAttr(mu.premultiply(attr("color_" + end), attr("opacity_" + end),
+                                        "%s_premult_%s" % (prefix, end), owned),
+                         "%s.colorEntryList[%d].color" % (ramps[0], idx))
         inv = cmds.createNode("reverse", name="%s_transparency_%s" % (prefix, end))
         for axis in "XYZ":
             cmds.connectAttr(attr("opacity_" + end), inv + ".input" + axis)

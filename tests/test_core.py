@@ -16,7 +16,8 @@ from dummy_effect_maker.core import BaseTool, Param, ToolContext, ToolError, exe
 from dummy_effect_maker.core import host, presets, registry, settings  # noqa: E402
 from dummy_effect_maker.tools import (camera_shake, energy_ball, focus_lines,  # noqa: E402
                                       ghost_blur, hand_shake, homing, shockwave, speed_lines,
-                                      vulcan)
+                                      vulcan, weather, weather_layers, wind)
+from dummy_effect_maker.tools import _weather as wx  # noqa: E402
 
 
 def test_param_kind_inference():
@@ -140,7 +141,16 @@ def test_homing_travel_keys():
 def test_tools_are_grouped_into_tabs():
     tools = registry.discover("dummy_effect_maker.tools")
     tabs = [(tab, [t.label for t in ts]) for tab, ts in registry.group_by_tab(tools)]
-    assert [tab for tab, _ in tabs] == [u"ツール", u"カメラ", u"エネルギー弾", u"衝撃波", u"お化けブラー"]
+    assert [tab for tab, _ in tabs] == [u"ツール", u"カメラ", u"エネルギー弾", u"衝撃波", u"お化けブラー",
+                                        u"天候"]
+    assert dict(tabs)[u"天候"] == [
+        u"風", u"風を更新", u"雨 (線と跳ね)", u"雨 (遠景の筒)", u"雪 (粒)", u"雪 (遠景の筒)",
+        u"土煙 (スプライト)", u"土煙 (もこもこ)", u"火花 (線)", u"火花 (尾を引く)",
+        u"霧 (霧の板)", u"霧 (遠景の重ね板)", u"地霧 (重ね板)", u"地霧 (這う霧)",
+        u"天候を更新", u"天候のパラメータを保存", u"天候のパラメータを読み込み"]
+    weather_tools = [t for t in tools if t.tab == u"天候"]
+    assert [c for c, _ in registry.group_by_category(weather_tools)] == [
+        u"風", u"雨", u"雪", u"土煙", u"火花", u"霧", u"地霧", u"調整"]
     assert dict(tabs)[u"お化けブラー"] == [
         u"残像", u"スミア (引き伸ばし)", u"軌跡", u"お化けブラーを更新",
         u"お化けブラーのパラメータを保存", u"お化けブラーのパラメータを読み込み"]
@@ -155,9 +165,28 @@ def test_tools_are_grouped_into_tabs():
         u"画ぶれを外す",
         u"手ブレ", u"手ブレを更新", u"手ブレのパラメータを保存", u"手ブレのパラメータを読み込み",
         u"手ブレを外す"]
-    assert dict(tabs)[u"ツール"][:8] == [
+    # ベイクと全削除はタブではなく上部の「シーン」メニュー
+    menus = [(m, [t.label for t in ts]) for m, ts in registry.group_by_menu(tools)]
+    assert menus == [(u"シーン", [u"ベイク", u"ダミーエフェクトを全削除"])]
+    assert u"ベイク" not in dict(tabs)[u"ツール"]
+    assert dict(tabs)[u"ツール"] == [
         u"追尾弾", u"追尾弾を更新", u"追尾弾のパラメータを保存", u"追尾弾のパラメータを読み込み",
         u"バルカン砲", u"バルカン砲を更新", u"バルカン砲のパラメータを保存", u"バルカン砲のパラメータを読み込み"]
+
+
+def test_menu_tools_are_not_in_tabs():
+    class TabTool(BaseTool):
+        label = u"a"
+        order = 1
+
+    class MenuTool(BaseTool):
+        label = u"b"
+        menu = u"シーン"
+        order = 2
+
+    tools = [TabTool(), MenuTool()]
+    assert [t for t, _ in registry.group_by_tab(tools)] == [u"ツール"]
+    assert [(m, [t.label for t in ts]) for m, ts in registry.group_by_menu(tools)] == [(u"シーン", [u"b"])]
 
 
 def test_focus_lines_params_are_live_or_rebuild():
@@ -775,3 +804,79 @@ def test_ghost_blur_smear_points():
     # 上限 (cap = 1) で止まる
     out = ghost_blur.smear_points(mats, _translate(-5, 0, 0), (0, 0, 0), (2, 2, 2), divs, v, 1.0)
     assert _close(out[0], -0.5 - 1.0 / 2)
+
+
+def test_weather_params_are_live_rebuild_or_create():
+    assert len(wx.KINDS) == 13
+    for kind in wx.KINDS.values():
+        names = set(p.name for p in kind.tool.params)
+        stored = set(kind.live) | set(kind.rebuild)
+        assert not set(kind.live) & set(kind.rebuild)
+        assert stored <= names
+        # 保存しないのは作成時だけの範囲の箱の設定
+        assert names - stored <= set(("area_width", "area_height", "follow_camera"))
+        if kind.need_wind:
+            assert "wind_influence" in kind.live
+        assert "seed" in names
+
+
+def test_weather_hash_is_stable_and_uniform():
+    a = wx.hash01(3, 5, 1, 1)
+    assert a == wx.hash01(3, 5, 1, 1) and 0 <= a < 1
+    values = [wx.hash01(i, 0, 1, 7) for i in range(2000)]
+    assert 0.45 < sum(values) / len(values) < 0.55
+    assert len(set(round(v, 6) for v in values)) > 1990
+    assert wx.mel_hash("$i", 0, 3) == ("fmod(abs(sin(($i) * 12.9898 + (0) * 78.233 + 3.0 * 37.719"
+                                        " + $sd * 4.1414) * 43758.5453), 1.0)")
+
+
+def test_wind_series_and_integral():
+    v = [wx.wind_vector((1.0, 0.0, 0.0), 0.2, 0.0, 1.5, 0.0, t, 1) for t in range(5)]
+    assert all(_close(w[0], 0.2) and _close(w[2], 0.0) for w in v)
+    drift = wx.integrate(v)
+    assert _close(drift[4][0], 0.8) and drift[0] == (0.0, 0.0, 0.0)
+    # 表の読み方 (直線補間、範囲外は端)
+    assert _close(wx.table_value(drift, -2, 0.5)[0], 0.2 * 2.5)
+    assert wx.table_value(drift, 0, -10) == drift[0] and wx.table_value(drift, 0, 99) == drift[-1]
+    # 突風: interval ごとに 0〜(1 + ばらつき) の山
+    g = [wx.gust_factor(t, 3, 40.0, 16.0, 0.0) for t in range(0, 400)]
+    assert min(g) >= 0 and 0.9 < max(g) <= 1.0 + 1e-9
+    assert sum(1 for a, b in zip(g, g[1:]) if a == 0 and b > 0) >= 8
+
+
+def test_spark_cone_direction():
+    for h1 in (0.0, 0.3, 1.0):
+        for h2 in (0.0, 0.6):
+            d = weather.cone_direction((0.0, 1.0, 0.0), h1, h2, 50.0)
+            assert _close(math.sqrt(sum(x * x for x in d)), 1.0)
+            assert math.degrees(math.acos(max(-1.0, min(1.0, d[1])))) <= 50.0 * h1 + 1e-6
+    d = weather.cone_direction((1.0, 0.0, 0.0), 1.0, 0.25, 90.0)   # 上が X 軸でも直交する向き
+    assert _close(d[0], 0.0)
+
+
+def test_spark_bounces_on_the_ground():
+    p, v = weather.spark_motion((0, 2, 0), (0.5, 0.5, 0), 0.05, 0.0, 0.5, 5.0)
+    assert _close(p[0], 2.5) and _close(p[1], 2 + 2.5 - 0.5 * 0.05 * 25)        # まだ地面に着かない
+    ys = [weather.spark_motion((0, 2, 0), (0.5, 0.5, 0), 0.05, 0.0, 0.5, a)[0][1] for a in range(0, 120)]
+    assert min(ys) >= -1e-9                                                       # 地面より下に行かない
+    # 跳ねるたびに低くなる
+    peaks = [ys[i] for i in range(1, len(ys) - 1) if ys[i - 1] < ys[i] >= ys[i + 1]]
+    assert len(peaks) >= 2 and peaks[1] < peaks[0]
+
+
+def test_falling_cycle():
+    c, age = weather.cycle(25.0, 10.0, 0.3)
+    assert c == 2 and _close(age, 8.0)
+    c2, age2 = weather.cycle(27.0, 10.0, 0.3)
+    assert c2 == 3 and _close(age2, 0.0)
+
+
+def test_weather_layer_helpers():
+    around, rv = weather_layers.far_repeat(12.0, 40.0, 3.0, 2.0)
+    assert around == 25 and _close(rv, 40.0 / 6.0)
+    assert _close(1 - (1 - weather_layers.layer_opacity(0.8, 5)) ** 5, 0.8)
+    assert weather_layers.ground_layer_opacity(0.6, 1.5, 0, 4) == 0.6
+    assert weather_layers.ground_layer_opacity(0.6, 0.0, 3, 4) == 0.6
+    assert weather_layers.ground_layer_opacity(0.6, 2.0, 2, 4) == 0.6 * 0.25
+    pts, faces, uvs, uv_ids = weather_layers.cylinder_layout(8)
+    assert len(pts) == 16 and len(faces) == 8 and len(uvs) == 18 and max(uv_ids) == 17

@@ -308,7 +308,9 @@ def build_effect(cmds, mu, root, v, center, edge):
     owned.extend([mm, dm])
 
     shader, sg = mu.create_surface_shader(prefix + "_mat", v["color"], 1.0 - v["opacity"])
-    cmds.connectAttr(attr("color"), shader + ".outColor", force=True)
+    # 色は 色 × 不透明度 (乗算済み)。半透明の所が後ろの色に足されて明るくならないように
+    cmds.connectAttr(mu.premultiply(attr("color"), attr("opacity"), prefix + "_premult", owned),
+                     shader + ".outColor", force=True)
     inv = cmds.createNode("reverse", name=prefix + "_transparency")
     for axis in "XYZ":
         cmds.connectAttr(attr("opacity"), inv + ".input" + axis)

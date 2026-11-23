@@ -43,14 +43,33 @@ def discover(package_name, on_error=None):
 
 
 def group_by_tab(tools):
-    """[(tab, [tool, ...]), ...] をタブの登場順 (= 最も小さい order 順) で返す。"""
+    """[(tab, [tool, ...]), ...] をタブの登場順 (= 最も小さい order 順) で返す。
+
+    メニューに入るツール (menu を指定したもの) は含めない。
+    """
     groups = []
     index = {}
     for tool in tools:
+        if tool.menu:
+            continue
         if tool.tab not in index:
             index[tool.tab] = len(groups)
             groups.append((tool.tab, []))
         groups[index[tool.tab]][1].append(tool)
+    return groups
+
+
+def group_by_menu(tools):
+    """[(menu, [tool, ...]), ...] をメニューの登場順で返す (menu を指定したツールだけ)。"""
+    groups = []
+    index = {}
+    for tool in tools:
+        if not tool.menu:
+            continue
+        if tool.menu not in index:
+            index[tool.menu] = len(groups)
+            groups.append((tool.menu, []))
+        groups[index[tool.menu]][1].append(tool)
     return groups
 
 

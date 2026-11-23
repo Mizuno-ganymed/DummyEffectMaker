@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""ランチャーの「環境設定」タブ。値は core.settings に即保存する。"""
+"""ランチャーの環境設定 (シーン メニュー → 環境設定)。値は core.settings に即保存する。"""
 from __future__ import absolute_import
 
 import os
 
 from ..core import settings
-from .qt import QtWidgets
+from .qt import QtCore, QtWidgets
 
 DEFAULT_PRESET_HINT = u"空欄: マイドキュメント/maya/DummyEffectMaker/presets/<種類> (既定)"
 
@@ -85,3 +85,29 @@ class SettingsPage(QtWidgets.QWidget):
 
     def _on_reset(self):
         self._store("")
+
+
+class SettingsDialog(QtWidgets.QDialog):
+    """SettingsPage を入れた小さなウインドウ (閉じても設定は保存済み)。"""
+
+    def __init__(self, log=None, parent=None):
+        super(SettingsDialog, self).__init__(parent)
+        self.setWindowTitle(u"環境設定")
+        self.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowContextHelpButtonHint)
+        self.page = SettingsPage(log=log)
+        close_btn = QtWidgets.QPushButton(u"閉じる")
+        close_btn.clicked.connect(self.close)
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.addStretch(1)
+        buttons.addWidget(close_btn)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(self.page)
+        layout.addLayout(buttons)
+        self.resize(460, 200)
+
+    def open_page(self):
+        """最新の設定を表示して開く (別のウインドウや手作業で変わっていても)。"""
+        self.page.refresh()
+        self.show()
+        self.raise_()
+        self.activateWindow()
