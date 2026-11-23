@@ -602,6 +602,23 @@ FBX に書き出して他のツール (ゲームエンジン、別の DCC など
 - 弾はインスタンスのまま。FBX でも表示/非表示のキーは残るが、表示のアニメーションを読まないツールもある。
   その場合は「非表示の間はスケール 0」を ON にする
 
+### シーン メニュー / 書き出し (Unreal 用)
+
+ダミーエフェクトを、Unreal Engine (Niagara) で仕上げるための**ショットのファイル (JSON)** に書き出す。
+プレビズの見た目ではなく、**タイミング・配置・パラメータ**を書く。
+
+1. 「シーン → 書き出し (Unreal 用)」(オプションで対象・フレーム範囲を選べる)
+2. 保存先を選ぶ (既定はプロジェクトの `data/dfx_shots/`)
+
+書くもの:
+
+- エフェクトの種類・パラメータ (と、その定義)
+- 動かして決めた物 (ロケータ・範囲の箱・出る場所など) と、カメラ (画ぶれ込み・焦点距離) の毎フレームの位置・向き
+- 弾の通り道と表示、爆発の当たった所と面の向き、風の流れ
+
+座標は右手系・Z が上・メートル (Blender と同じ) に直して書く。Unreal への変換や形式の詳細は
+[docs/exchange_format.md](docs/exchange_format.md)。書き出しはシーンを変えない。
+
 ### シーン メニュー / ダミーエフェクトを全削除
 
 このツール群で作ったノード (グループ、マテリアル、補助ノード) をまとめて削除する。
@@ -611,16 +628,69 @@ FBX に書き出して他のツール (ゲームエンジン、別の DCC など
 「パラメータを保存 / 読み込み」のダイアログで最初に開くフォルダを決める。小さなウインドウが開き、
 入力した時点で保存される (空欄なら種類ごとの既定のフォルダ)。設定は `%APPDATA%/DummyEffectMaker/settings.json` に残る。
 
+## Blender 版 (立ち上げ中)
+
+Maya 版と同じパラメータ・同じ計算・同じ書き出しの形式で、Blender (4.2 以降。5.1 で確認) でもダミーエフェクトを作る。
+今あるのは **バルカン砲・衝撃波** と、シーンの「エフェクトを更新」「ダミーエフェクトを全削除」「書き出し (Unreal 用)」。
+
+### 起動方法
+
+- **アドオンとして入れる (おすすめ)**: 編集 → プリファレンス → アドオン → ∨ →「ディスクからインストール」で
+  `scripts/blender_addon.py` を選び、アドオンの設定の「DummyEffectMaker フォルダ」にこのリポジトリの場所を入れる
+  (環境変数 `DUMMY_EFFECT_MAKER_PATH` でもよい)。設定の「読み込み直す」で、再起動せずにコードを読み直せる
+- **その場で試す**: `scripts/blender_launcher.py` の `REPO_PATH` を書き換えて、テキストエディタで実行
+
+3D ビューの右のサイドバー (N キー) に「**Dummy Effect**」タブが出る。
+
+### 使い方
+
+- タブ → グループごとにボタンが並ぶ (Maya 版のランチャーと同じ)。ボタンで今のオプションのまま実行、歯車でオプションを開いて実行
+- 「**選択したエフェクト**」パネル: 選んだエフェクトのパラメータ。すぐ反映の物は変えるとすぐ変わる。
+  「(更新)」の付いた物は「エフェクトを更新」で作り直す
+- Maya 版と同じ構成: ルート (Empty。パラメータはカスタムプロパティ `dfx_*`) の子に、動かして決める Empty (発射位置・目標・中心・端) と、ツールが作る物
+- Empty にキーを打ってよい (バルカン砲は発射した時点の目標の位置を、キーから読む)
+- 動きは、フレームが変わるたび (と、パラメータや Empty を動かした時) に Python で計算し直す (Maya 版と同じ関数)。
+  表示しない間は大きさ 0 にしている
+- 衝撃波の輪は、中心の Empty のローカル **XY 面** に広がる (Maya 版は XZ 面。Blender は Z が上のため)。太さはシェイプキー `thick`
+- 書き出しは Maya 版と同じ形式 (Blender は Z が上・メートルなので座標はそのまま)。保存先はオプションの「書き出すファイル」(`//` は .blend と同じフォルダ)
+
+### Blender 版のツールの足し方
+
+`dummy_effect_maker/blender/tools/` に .py を足し、`hosts = ("blender",)` のツールを書く。
+パラメータ (`params`) と計算は Maya 版のモジュールから使い回し、組み立て (`build`) と毎フレームの更新 (`update`) を書いて
+`_build.register_builder()` で登録する。画面 (ボタン・オプション・パラメータのパネル) は自動でできる。
+
+検証: `blender -b --factory-startup --python tests/blender_verify.py -- <リポジトリのフォルダ>`
+
+## 土台 (Maya / Blender / Unreal で共通にする部分)
+
+プレビズを Maya と Blender で作り、Unreal Engine で仕上げる流れのために、ソフトに依存しない部分を分けている。
+
+| 部分 | ファイル | 中身 |
+| --- | --- | --- |
+| ツールの仕組み | `core/tool.py`, `core/registry.py` | パラメータの定義 (Param)、ツールの登録、実行とアンドゥ |
+| ホスト | `core/host.py` | Maya / Blender / スタンドアロンの差分 (アンドゥ、親ウインドウ)。ツールは `hosts` で動くソフトを決める |
+| エフェクトの一覧 | `catalog.py` | 種類ごとの名前・パラメータ・すぐ反映か・分類 (新しいエフェクトを足したらここにも 1 行) |
+| 受け渡し形式 | `core/exchange.py` | ショットの JSON、座標の変換 (共通の空間・Unreal)、トラック |
+| プリセット・設定 | `core/presets.py`, `core/settings.py` | パラメータの保存、環境設定 |
+| 計算 | 各 `tools/*.py` の純粋な関数 | 弾の軌道・粒の動き・当たり判定の考え方など (Maya を使わない) |
+
+ここまでは Maya が無くても動く (Blender 5.1 の Python でも読み込めることを確かめている)。
+Maya で組み立てる部分 (エクスプレッション・ノード) は各 `tools/*.py` の `run()` と build 関数の中だけにある。
+Blender 版は、同じパラメータと計算を使い、組み立てだけを Blender (Geometry Nodes など) で作る予定。
+
 ## 構成
 
 ```
 dummy_effect_maker/
   __init__.py          show() / reload_and_show()
+  catalog.py           エフェクトの一覧 (Maya / Blender / Unreal で共通の設計図)
   core/                Qt にも Maya にも依存しない層 (スタンドアロンでもそのまま使う)
     tool.py            BaseTool / Param / ToolContext / execute
     registry.py        tools/ からツールを自動収集
-    host.py            Maya / スタンドアロンの差分 (アンドゥ、親ウインドウ)
+    host.py            Maya / Blender / スタンドアロンの差分 (アンドゥ、親ウインドウ)
     presets.py         パラメータのプリセット (.json) の保存と読み込み
+    exchange.py        ショットの受け渡し形式 (Unreal 用 JSON)・座標の変換
     settings.py        環境設定 (%APPDATA%/DummyEffectMaker/settings.json)
   ui/                  Qt の UI (PySide2/6 両対応)
     main_window.py     ランチャーウインドウ
@@ -642,11 +712,19 @@ dummy_effect_maker/
     weather.py         雨・雪・土煙・火花 (粒で作るもの) と天候の更新・プリセット
     weather_layers.py  遠景の筒・霧・地霧 (大きな板で作るもの)
     explosion.py       コリジョンと爆発 (爆発 タブ)
+    export_shot.py     書き出し (Unreal 用。シーン メニュー)
     bake.py            ベイク
     cleanup.py         全削除
+  blender/             Blender 版 (bpy を使う。Blender の中でだけ読み込む)
+    runtime.py         ルート・パラメータ (カスタムプロパティ)・毎フレームの更新
+    ui.py              Param からオペレーターとサイドバーのパネルを自動で作る
+    tools/             Blender 版のツール (バルカン砲・衝撃波・シーン)
 scripts/maya_launcher.py   Maya 起動用スニペット
+scripts/blender_launcher.py  Blender で試す時の起動スクリプト
+scripts/blender_addon.py   Blender のアドオン (リポジトリから読み込む)
 run_standalone.py          Maya 外での起動 (UI 確認用)
-tests/                     Maya なしで動くテスト
+tests/                     Maya なしで動くテスト (blender_verify.py は Blender 版の検証)
+docs/exchange_format.md    ショットの受け渡し形式 (Unreal 用 JSON) の説明
 ```
 
 ## ツールの追加方法

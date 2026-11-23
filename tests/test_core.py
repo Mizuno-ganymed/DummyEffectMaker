@@ -170,7 +170,7 @@ def test_tools_are_grouped_into_tabs():
         u"手ブレを外す"]
     # ベイクと全削除はタブではなく上部の「シーン」メニュー
     menus = [(m, [t.label for t in ts]) for m, ts in registry.group_by_menu(tools)]
-    assert menus == [(u"シーン", [u"ベイク", u"ダミーエフェクトを全削除"])]
+    assert menus == [(u"シーン", [u"ベイク", u"書き出し (Unreal 用)", u"ダミーエフェクトを全削除"])]
     assert u"ベイク" not in dict(tabs)[u"ツール"]
     assert dict(tabs)[u"ツール"] == [
         u"追尾弾", u"追尾弾を更新", u"追尾弾のパラメータを保存", u"追尾弾のパラメータを読み込み",
@@ -974,3 +974,100 @@ def test_explosion_hit_helpers():
     assert explosion.BULLET_NAME.search("dfx_vulcan1_bullet_003")
     assert explosion.BULLET_NAME.search("dfx_energy1_ball_02")
     assert not explosion.BULLET_NAME.search("dfx_homing1_bulletSrc")
+
+
+# ---------------------------------------------------------------- 土台 (カタログ・受け渡し形式・ホスト)
+from dummy_effect_maker import catalog  # noqa: E402
+from dummy_effect_maker.core import exchange as xc  # noqa: E402
+
+
+def _registered_effect_types():
+    types = set()
+    for m in (homing, vulcan, energy_ball, focus_lines, speed_lines, camera_shake, hand_shake,
+              shockwave, explosion):
+        types.add(m.EFFECT_TYPE)
+    types.update(ghost_blur.KINDS)
+    types.update(wx.KINDS)
+    return types
+
+
+def test_catalog_covers_every_effect():
+    specs = catalog.specs()
+    assert set(s.effect_type for s in specs) == _registered_effect_types()
+    for s in specs:
+        names = [p.name for p in s.params]
+        assert set(s.live) | set(s.rebuild) == set(names)
+        assert s.group in (catalog.BULLETS, catalog.CAMERA, catalog.BURST, catalog.PARTICLES,
+                           catalog.LAYERS, catalog.MOTION, catalog.CONTROL)
+    text = json.dumps(catalog.describe_all(), ensure_ascii=False)
+    assert u"バルカン砲" in text and catalog.spec("vulcan").describe()["color"]["kind"] == "color"
+    with pytest.raises(KeyError):
+        catalog.spec("nothing")
+
+
+def test_host_detect_outside_maya_and_blender():
+    assert host.detect().name == "standalone"
+
+
+def _close3(a, b, tol=1e-9):
+    return all(abs(x - y) <= tol for x, y in zip(a, b))
+
+
+def test_exchange_converts_maya_space():
+    # Maya (Y が上・センチ) → 共通 (Z が上・メートル): (x, y, z) → (x, -z, y) / 100
+    assert _close3(xc.convert_point((100, 200, 300), "y", 0.01), (1, -3, 2))
+    assert _close3(xc.convert_point((100, 200, 300), "z", 0.01), (1, 2, 3))
+    assert _close3(xc.convert_vector((0, 1, 0), "y"), (0, 0, 1))      # Maya の上 → 共通の上
+    # Y 軸まわり 90 度 (Maya) の回転: ローカル X 軸が Maya の -Z を向く → 共通の +Y を向く
+    m = [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1]
+    t, q, s = xc.decompose(xc.convert_matrix(m, "y", 0.01))
+    rows = xc.rows_from_quaternion(q)
+    assert _close3(rows[0], (0, 1, 0)) and _close3(rows[1], (0, 0, 1)) and _close3(s, (1, 1, 1))
+    # 拡大縮小と負の拡大縮小
+    t, q, s = xc.decompose([2, 0, 0, 0, 0, 3, 0, 0, 0, 0, -4, 0, 5, 6, 7, 1])
+    assert _close3(t, (5, 6, 7)) and _close3(s, (2, 3, -4)) and _close3(q, (0, 0, 0, 1))
+
+
+def test_exchange_quaternion_roundtrip():
+    import math as _m
+    for ax, ang in (((1, 0, 0), 30), ((0, 1, 0), 170), ((0.3, 0.4, 0.866), 95), ((0, 0, 1), 180)):
+        n = _m.sqrt(sum(a * a for a in ax))
+        ax = [a / n for a in ax]
+        h = _m.radians(ang) / 2
+        q = tuple([a * _m.sin(h) for a in ax] + [_m.cos(h)])
+        back = xc.quaternion_from_rows(xc.rows_from_quaternion(q))
+        if back[3] * q[3] < 0 or (abs(q[3]) < 1e-9 and sum(a * b for a, b in zip(q, back)) < 0):
+            back = tuple(-x for x in back)
+        assert _close3(back, q, 1e-9)
+
+
+def test_exchange_to_unreal():
+    p, q = xc.to_unreal((1.0, 2.0, 3.0), (0.1, 0.2, 0.3, 0.9))
+    assert _close3(p, (100, -200, 300)) and _close3(q, (-0.1, 0.2, -0.3, 0.9))
+
+
+def test_exchange_tracks():
+    still = xc.make_track([1, 2, 3], [{"t": (1.0, 2.0, 3.0), "v": True}] * 3)
+    assert still == {"static": True, "t": [1.0, 2.0, 3.0], "v": True}
+    moving = xc.make_track([1, 2, 3], [{"t": (0.0, 0.0, float(i))} for i in range(3)])
+    assert not moving["static"] and moving["frames"] == [1, 2, 3]
+    assert xc.track_value(moving, "t", 2.5) == [0.0, 0.0, 1.5]
+    assert xc.track_value(moving, "t", 99) == [0.0, 0.0, 2.0]
+    assert xc.track_value(still, "t", 50) == [1.0, 2.0, 3.0]
+
+
+def test_exchange_file_roundtrip_and_errors():
+    with _TempDir() as d:
+        path = os.path.join(d, "shot.json")
+        shot = xc.new_shot({"app": "test"}, 24.0, 1, 10)
+        shot["effects"].append({"type": "vulcan", "params": {"color": [1, 0, 0]}})
+        xc.write_shot(path, shot)
+        back = xc.read_shot(path)
+        assert back["space"] == {"up": "Z", "handedness": "right", "unit": "meter"}
+        assert back["effects"][0]["params"]["color"] == [1, 0, 0]
+        _write_json(path, {"format": "other"})
+        with pytest.raises(xc.ExchangeError):
+            xc.read_shot(path)
+        _write_json(path, {"format": xc.FORMAT_NAME, "version": xc.FORMAT_VERSION + 1})
+        with pytest.raises(xc.ExchangeError):
+            xc.read_shot(path)
