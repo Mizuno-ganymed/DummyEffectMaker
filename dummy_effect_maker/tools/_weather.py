@@ -27,7 +27,8 @@ WIND_ATTR = "dfx_wind"            # 天候のルート → 風 (メッセージ)
 CAMERA_ATTR = "dfx_camera"        # 天候のルート → カメラ
 AREA_ATTR = "dfx_area"            # 天候のルート → 範囲の箱
 EMITTER_ATTR = "dfx_emitter"      # 天候のルート → 出る場所のロケータ
-LINK_ATTRS = (WIND_ATTR, CAMERA_ATTR, AREA_ATTR, EMITTER_ATTR)
+STRIKE_ATTR = "dfx_strike"        # 天候のルート → 落ちる所のロケータ (稲妻)
+LINK_ATTRS = (WIND_ATTR, CAMERA_ATTR, AREA_ATTR, EMITTER_ATTR, STRIKE_ATTR)
 
 # 風のルートに持たせる毎フレームの表 (doubleArray。パラメータではないので dfx_ で始めない)
 DRIFT_ATTRS = ("dfxDriftX", "dfxDriftY", "dfxDriftZ")   # 風に流された距離 (積分)
@@ -118,7 +119,8 @@ def table_value(table, start, t):
 # カメラ・範囲の箱・出る場所の位置は、getAttr の文字列ではなく decomposeMatrix の出力を
 # 直接読む (エクスプレッションの入力として接続される)。そうしないと Maya はつながりを知らず、
 # フレームを変えずに箱やカメラを動かした時に、雨などが付いてこない。
-TRACK_SUFFIX = {CAMERA_ATTR: "_cameraXform", AREA_ATTR: "_areaXform", EMITTER_ATTR: "_emitterXform"}
+TRACK_SUFFIX = {CAMERA_ATTR: "_cameraXform", AREA_ATTR: "_areaXform", EMITTER_ATTR: "_emitterXform",
+                STRIKE_ATTR: "_strikeXform"}
 
 
 def track_name(root, attr):
@@ -132,7 +134,7 @@ def track_links(cmds, mu, root, owned):
     except RuntimeError:
         pass
     made = {}
-    for attr in (CAMERA_ATTR, AREA_ATTR, EMITTER_ATTR):
+    for attr in (CAMERA_ATTR, AREA_ATTR, EMITTER_ATTR, STRIKE_ATTR):
         node = find_link(cmds, root, attr)
         if not node:
             continue
@@ -686,7 +688,7 @@ def warn_if_textures_hidden(cmds, ctx):
 
 # 半透明が見どころの種類。ハードウエアレンダリングの透明度が「アルファ カット」だと消える
 TRANSLUCENT_TYPES = ("rain", "rain_far", "snow_far", "fog", "fog_depth", "ground_fog",
-                     "ground_crawl")
+                     "ground_crawl", "lightning_real", "lightning_anime")
 ALPHA_CUT = 5   # hardwareRenderingGlobals.transparencyAlgorithm の「アルファ カット」
 ALPHA_CUT_HINT = (u"  ※ ハードウエアレンダリングの透明度のアルゴリズムが「アルファ カット」のため、"
                   u"半透明の部分がビューポートと Hardware 2.0 で消えます。"

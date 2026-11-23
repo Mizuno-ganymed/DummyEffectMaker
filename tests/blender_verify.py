@@ -793,6 +793,141 @@ def b12_export_more():
           and c["name"] == "shotCam" and moving)
 
 
+# ---------------------------------------------------------------- 核爆発
+@section
+def b13_nuke():
+    from dummy_effect_maker.blender.tools import _wx, nuke as bn
+    from dummy_effect_maker.tools import nuke as mn
+    from dummy_effect_maker.tools.ghost_blur import rotation_rows
+    from dummy_effect_maker import motion as mo
+    new_scene()
+    cam = scene_camera(loc=(0, -120, 20))
+    spot = bpy.data.objects.new("spot", None)
+    bpy.context.scene.collection.objects.link(spot)
+    spot.location = (4, 6, 0)
+    select(spot, cam)
+    op(bn.NukeTool, start_frame=3.0, stem_count=6, cap_count=8, base_count=5, rise_frames=30.0,
+       life_frames=60.0, cool_frames=20.0, shock_frames=12.0, fireball_frames=20.0)
+    root = bpy.data.objects.get("dfx_nuke1")
+    center = rt.control(root, "center")
+    cloud = _wx.part(root, "_cloud")
+    check("核爆発: 単体で作れる (爆心は選んだ物の位置・カメラとつながる・雲は 1 つのメッシュ)",
+          root is not None and near(center.location, (4, 6, 0)) and root.get("dfx_camera") == cam
+          and cloud.data["dfx_count"] == 19 and all(_wx.part(root, "_" + n) for n in ("flash", "shock", "dome", "fireball")))
+    center.rotation_euler = (math.radians(15), 0, math.radians(30))
+    v = rt.read_params(root, mn.KIND.stored_params())
+    bad = []
+    for f in (3, 4, 6, 9, 15, 25, 40, 58, 70):
+        bpy.context.scene.frame_set(f)
+        p0, axes = bn.center_yup(root)
+        cp, cdir = _wx.camera_yup(root)
+        p, sz, vis = mo.nuke_flash(f, v, p0, axes)
+        if not same_particle(_wx.part(root, "_flash"), 0, (p, mo.billboard(p, cp, cdir), (sz,) * 3) if vis else _wx.hidden(p)):
+            bad.append(("flash", f))
+        for name, fn in (("shock", mo.nuke_shock), ("dome", mo.nuke_dome)):
+            p, rows, sz, vis, _ = fn(f, v, p0, axes)
+            if not same_particle(_wx.part(root, "_" + name), 0, (p, rows, (sz,) * 3) if vis else _wx.hidden(p)):
+                bad.append((name, f))
+        p, sz, vis, rot = mo.nuke_fireball(f, v, p0, axes)
+        if not same_particle(_wx.part(root, "_fireball"), 0, (p, rotation_rows(*rot), (sz,) * 3) if vis else _wx.hidden(p)):
+            bad.append(("fireball", f))
+        k = 0
+        for fn, count in ((mo.nuke_stem, 6), (mo.nuke_cap, 8), (mo.nuke_base, 5)):
+            for j in range(count):
+                p, sz, vis, rot = fn(j, count, f, v, p0, axes)
+                if not same_particle(cloud, k, (p, rotation_rows(*rot), (sz,) * 3) if vis else _wx.hidden(p)):
+                    bad.append((fn.__name__, f, j))
+                k += 1
+    check("核爆発: Maya 版と同じ計算 (閃光・衝撃波・ドーム・火の玉・柱・かさ・根元。回した爆心)", not bad, str(bad[:3]))
+    center.rotation_euler = (0, 0, 0)
+    bpy.context.scene.frame_set(40)
+    cap = [Vector(_wx.read_particle(cloud, 6 + j)[0]).z for j in range(8)]
+    check("核爆発: 雲は爆心の上 (+Z) に上がる", min(cap) > v["size"], str(min(cap)))
+    ring = [Vector(p) for p in _wx.read_particle(_wx.part(root, "_shock"), 0)]
+    bpy.context.scene.frame_set(6)
+    ring = [Vector(p) for p in _wx.read_particle(_wx.part(root, "_shock"), 0)]
+    check("核爆発: 衝撃波の輪は地面 (Z ≒ 0) に寝ている", all(abs(p.z - v["size"] * 0.02) < 1e-4 for p in ring))
+    mat = _wx.material_of(cloud)
+    bad = []
+    for f in (3, 13, 30, 52):
+        bpy.context.scene.frame_set(f)
+        color, shade, alpha = mo.nuke_colors(f, v)
+        ramp = mat.node_tree.nodes["dfx_toon"].color_ramp
+        if not near(ramp.elements[1].color[:3], color, 1e-5) or not near(ramp.elements[0].color[:3], shade, 1e-5) \
+                or abs(mat.node_tree.nodes["dfx_mix"].inputs[0].default_value - alpha) > 1e-5:
+            bad.append(f)
+    check("核爆発: 雲の色は火の色から煙の色へ、最後に薄れる", not bad, str(bad))
+    bpy.context.scene.frame_set(1)
+    check("核爆発: 開始フレームより前は何も見えない", all(particle_size(cloud, k) < 1e-9 for k in range(19))
+          and particle_size(_wx.part(root, "_flash"), 0) < 1e-9)
+    root["dfx_cap_count"] = 12
+    select(root)
+    op(bscene.UpdateEffectsTool)
+    check("核爆発: 更新で煙の数が変わる (爆心はそのまま)", _wx.part(root, "_cloud").data["dfx_count"] == 23
+          and near(rt.control(root, "center").location, (4, 6, 0)))
+    path = os.path.join(TMP, "shot_nuke")
+    op(bscene.ExportShotTool, path=path, range_mode=bscene.RANGE_CUSTOM, start_frame=1.0, end_frame=10.0)
+    eff = [e for e in xc.read_shot(path + ".json")["effects"] if e["type"] == "nuke"][0]
+    check("核爆発: 書き出し (種類・パラメータ・爆心)", eff["params"]["cap_count"] == 12
+          and [c["role"] for c in eff["controls"]] == ["center"]
+          and near(eff["controls"][0]["track"]["t"], (4, 6, 0), 1e-6))
+
+
+# ---------------------------------------------------------------- 稲妻
+@section
+def b14_lightning():
+    from dummy_effect_maker.blender.tools import _wx, lightning as bl
+    from dummy_effect_maker.tools import lightning as ml
+    from dummy_effect_maker import motion as mo
+    new_scene()
+    cam = scene_camera(loc=(0, -80, 15))
+    spot = bpy.data.objects.new("spot", None)
+    bpy.context.scene.collection.objects.link(spot)
+    spot.location = (3, 4, 0)
+    for tool, kind, name, kw in ((bl.LightningRealTool, ml.REAL, "dfx_lightning1",
+                                  dict(count=4, interval=10.0, segments=20, branches=3, branch_segments=6, flicker=0.5)),
+                                 (bl.LightningAnimeTool, ml.ANIME, "dfx_lightningAnime1", dict(count=4, interval=10.0))):
+        select(spot, cam)
+        op(tool, **kw)
+        root = bpy.data.objects.get(name)
+        top, gnd = rt.control(root, "top"), rt.control(root, "ground")
+        bolt, glow = _wx.part(root, "_bolt"), _wx.part(root, "_glow")
+        v = rt.read_params(root, kind.stored_params())
+        n, nb, m = int(v["segments"]), int(v["branches"]), int(v["branch_segments"])
+        check(u"%s: 作成 (雲の点は落ちる所の真上・帯 2 本・点の数)" % tool.label,
+              near(gnd.location, (3, 4, 0)) and near(top.location, (3, 4, 40)) and root.get("dfx_camera") == cam
+              and bolt.data["dfx_count"] == n + nb * m and glow is not None)
+        top.location.x -= 2
+        bad, lit = [], 0
+        for f in (1, 2, 3, 4, 6, 9, 12, 13, 15, 22, 33, 45):
+            bpy.context.scene.frame_set(f)
+            cp, cdir = _wx.camera_yup(root)
+            rows, alpha = mo.lightning_rows(ml.STYLES[kind.effect_type], f, v, mo.yup_vector(tuple(top.matrix_world.translation)),
+                                            mo.yup_vector(tuple(gnd.matrix_world.translation)), cp, cdir, n, nb, m)
+            lit += alpha > 0
+            for j, (p, axes, w) in enumerate(rows):
+                pl = (p, axes, (w,) * 3) if w > 1e-9 else _wx.hidden(p)
+                if not same_particle(bolt, j, pl) or not same_particle(glow, j, pl):
+                    bad.append((f, j))
+            if abs(bolt.data.materials[0].node_tree.nodes["dfx_mix"].inputs[0].default_value - alpha) > 1e-6:
+                bad.append(("alpha", f))
+        check(u"%s: Maya 版と同じ形・伸び方・太さ・ちらつき (動かした雲の点)" % tool.label, not bad and lit >= 4,
+              str((bad[:3], lit)))
+    root = bpy.data.objects.get("dfx_lightning1")
+    bolt = _wx.part(root, "_bolt")
+    bpy.context.scene.frame_set(3)
+    low = min(Vector(_wx.read_particle(bolt, 19)[0]).z, Vector(_wx.read_particle(bolt, 19)[1]).z)
+    high = max(Vector(p).z for p in _wx.read_particle(bolt, 0))
+    check("稲妻: 雲 (Z = 40) から地面 (Z = 0) まで届く", abs(high - 40) < 0.1 and abs(low) < 0.1, str((high, low)))
+    bpy.context.scene.frame_set(8)
+    check("稲妻: 光っていない間は見えない", all(particle_size(bolt, j) < 1e-9 for j in range(38)))
+    root["dfx_branches"] = 5
+    select(root)
+    op(bscene.UpdateEffectsTool)
+    check("稲妻: 更新で枝の数が変わる (雲の点・落ちる所はそのまま)",
+          _wx.part(root, "_bolt").data["dfx_count"] == 20 + 5 * 6 and near(rt.control(root, "top").location, (1, 4, 40)))
+
+
 @section
 def b05_delete_all():
     op(bscene.DeleteAllTool)
@@ -804,7 +939,7 @@ def b05_delete_all():
 
 for fn in (b01_register, b02_vulcan, b03_shockwave, b04_export, b05_delete_all, b06_wind,
            b07_rain_snow, b08_dust_sparks, b09_homing_energy, b10_explosion,
-           b11_shakes, b12_export_more):
+           b11_shakes, b12_export_more, b13_nuke, b14_lightning):
     fn()
 fails = [r for r in RESULTS if not r[1]]
 print("\nSUMMARY: %d passed, %d failed" % (len(RESULTS) - len(fails), len(fails)))

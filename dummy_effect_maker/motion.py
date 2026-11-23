@@ -393,3 +393,275 @@ def explosion_spark(e, j, frame, hit, v):
         fade = max(0.0, (life - ag) / (0.3 * life))
     w = 0.04 * s0 * fade
     return p, vel, (w, max(mag(vel) * 1.5, w), 1.0), 0 <= age <= life
+
+
+# ---------------------------------------------------------------- 核爆発 (単体の大きな爆発)
+# 中心 (爆心) の位置 p0 と、中心の向き axes = (X, 上, Z) (単位ベクトル) から決める。
+# 部品の位置は「中心の空間」(x: X 軸、y: 上、z: Z 軸) で計算してから p0 + 軸 で置く。
+def nuke_state(frame, v):
+    """全体の時刻の値 (経過 a・大きさ S・上がり具合 rise・かさの高さ H・薄れ fade・冷え cool)。"""
+    a = (frame - v["start_frame"]) * max(v["speed"], 0.001)
+    s0 = v["size"]
+    tau = max(v["rise_frames"], 1.0) / 3.0
+    rise = 1 - math.exp(-max(a, 0.0) / tau)
+    life = max(v["life_frames"], 1.0)
+    return {"a": a, "S": s0, "tau": tau, "rise": rise, "H": s0 * v["cloud_height"] * rise,
+            "life": life, "vis": 0 <= a <= life,
+            "fade": clamp(0, 1, (life - a) / (0.25 * life)),
+            "cool": clamp(0, 1, a / max(v["cool_frames"], 1.0))}
+
+
+def nuke_place(p0, axes, local):
+    x, u, z = axes
+    return add(p0, add(mul(x, local[0]), add(mul(u, local[1]), mul(z, local[2]))))
+
+
+def _nuke_rot(j, k, a, spin, sd):
+    return (h(j, 0, k, sd) * 360 + spin * a, h(j, 0, k + 1, sd) * 360, h(j, 0, k + 2, sd) * 360 + spin * 0.5 * a)
+
+
+def nuke_flash(frame, v, p0, axes):
+    """閃光 (位置, 大きさ, 表示)。向きはカメラを向く板 (billboard)。"""
+    st = nuke_state(frame, v)
+    a, s0 = st["a"], st["S"]
+    life = max(v["flash_frames"], 0.01)
+    sz = s0 * v["flash_size"] * math.sin(3.1415927 * clamp(0, 1, a / life))
+    return nuke_place(p0, axes, (0.0, s0 * 0.5, 0.0)), sz, 0 <= a <= life and sz > 0
+
+
+def nuke_shock(frame, v, p0, axes):
+    """地面を走る衝撃波の輪 (位置, 軸, 大きさ, 表示, 濃さ)。輪は中心の X-Z 面。"""
+    st = nuke_state(frame, v)
+    a, s0 = st["a"], st["S"]
+    k = clamp(0, 1, a / max(v["shock_frames"], 0.01))
+    sz = s0 * v["shock_size"] * (1 - (1 - k) ** 3)
+    return (nuke_place(p0, axes, (0.0, s0 * 0.02, 0.0)), axes, sz, 0 <= a < v["shock_frames"] and sz > 0,
+            v["opacity"] * (1 - k))
+
+
+def nuke_dome(frame, v, p0, axes):
+    """衝撃波のドーム (半球。位置, 軸, 大きさ, 表示, 濃さ)。"""
+    st = nuke_state(frame, v)
+    a, s0 = st["a"], st["S"]
+    k = clamp(0, 1, a / max(v["shock_frames"] * 0.5, 0.01))
+    sz = s0 * v["shock_size"] * 0.6 * (1 - (1 - k) ** 2)
+    vis = 0 <= a < v["shock_frames"] * 0.5 and sz > 0 and v["dome_opacity"] > 0
+    return p0, axes, sz, vis, v["dome_opacity"] * (1 - k) ** 2
+
+
+def nuke_fireball(frame, v, p0, axes):
+    """火の玉 (位置, 大きさ, 表示, 回転)。かさと一緒に上がり、だんだん小さくなって消える。"""
+    st = nuke_state(frame, v)
+    a, s0 = st["a"], st["S"]
+    fb = max(v["fireball_frames"], 1.0)
+    ag = max(a, 0.0)
+    sz = s0 * v["fireball_size"] * (1 - math.exp(-ag / 3.0))
+    if a > 0.6 * fb:
+        sz = sz * max(0.0, (fb - a) / (0.4 * fb))
+    p = nuke_place(p0, axes, (0.0, st["H"] + sz * 0.5, 0.0))
+    return p, sz, 0 <= a <= fb and sz > 0, _nuke_rot(0, 1, ag, v["spin"], v["seed"])
+
+
+def nuke_stem(j, count, frame, v, p0, axes):
+    """キノコ雲の柱の煙 j (位置, 大きさ, 表示, 回転)。根元ほど太い。"""
+    st = nuke_state(frame, v)
+    a, s0, sd = st["a"], st["S"], v["seed"]
+    ag = max(a, 0.0)
+    s = (j + 0.5) / float(max(count, 1))
+    th = TAU * h(j, 0, 11, sd) + 0.03 * ag
+    rr = s0 * v["stem_width"] * 0.35 * h(j, 0, 12, sd)
+    grow = 1 - math.exp(-ag / (st["tau"] * 0.5))
+    sz = s0 * v["stem_width"] * (0.55 + 0.45 * h(j, 0, 13, sd)) * (0.5 + 0.5 * (1 - s)) * grow
+    p = nuke_place(p0, axes, (math.cos(th) * rr, st["H"] * s * 0.95, math.sin(th) * rr))
+    return p, sz, st["vis"] and sz > 0, _nuke_rot(j, 14, ag, v["spin"], sd)
+
+
+def nuke_cap(j, count, frame, v, p0, axes):
+    """キノコ雲のかさの煙 j (位置, 大きさ, 表示, 回転)。外側から下へ巻き込みながら広がる。"""
+    st = nuke_state(frame, v)
+    a, s0, sd = st["a"], st["S"], v["seed"]
+    ag = max(a, 0.0)
+    n = float(max(count, 1))
+    th = TAU * (j + (h(j, 0, 21, sd) - 0.5)) / n
+    ph = TAU * h(j, 0, 22, sd) - math.radians(v["roll"]) * ag
+    big = s0 * v["cap_width"] * (0.3 + 0.7 * st["rise"])
+    tube = big * 0.5
+    out = big + tube * math.cos(ph)
+    p = nuke_place(p0, axes, (math.cos(th) * out, st["H"] + tube * 0.7 * math.sin(ph), math.sin(th) * out))
+    sz = s0 * v["cap_width"] * 0.45 * (0.7 + 0.5 * h(j, 0, 23, sd)) * (0.35 + 0.65 * st["rise"])
+    return p, sz, st["vis"] and sz > 0, _nuke_rot(j, 24, ag, v["spin"], sd)
+
+
+def nuke_base(j, count, frame, v, p0, axes):
+    """根元に広がる土煙 j (位置, 大きさ, 表示, 回転)。"""
+    st = nuke_state(frame, v)
+    a, s0, sd = st["a"], st["S"], v["seed"]
+    ag = max(a, 0.0)
+    n = float(max(count, 1))
+    th = TAU * (j + (h(j, 0, 31, sd) - 0.5)) / n
+    dist = s0 * v["base_spread"] * (1 - math.exp(-ag / (st["tau"] * 0.7))) * (0.75 + 0.5 * h(j, 0, 32, sd))
+    sz = s0 * v["base_size"] * (0.5 + 0.5 * h(j, 0, 33, sd)) * (0.3 + 0.7 * (1 - math.exp(-ag / (st["tau"] * 0.5))))
+    p = nuke_place(p0, axes, (math.cos(th) * dist, sz * 0.35, math.sin(th) * dist))
+    return p, sz, st["vis"] and sz > 0, _nuke_rot(j, 34, ag, v["spin"], sd)
+
+
+def nuke_colors(frame, v):
+    """雲の (色, 影の色, 濃さ)。火の色から煙の色へ冷え、最後に薄れる。"""
+    st = nuke_state(frame, v)
+    k = st["cool"]
+    color = tuple(f + (c - f) * k for f, c in zip(v["fire_color"], v["cloud_color"]))
+    shade = tuple(f + (c - f) * k for f, c in zip(v["fire_shade"], v["cloud_shade"]))
+    return color, shade, v["opacity"] * st["fade"]
+
+
+# ---------------------------------------------------------------- 稲妻
+# 雲 (top) から地面 (ground) へ落ちる帯。回 c ごとに形・落ちる所が変わる。
+# 形は「本筋 (点 N 個)」と「枝 B 本 (各 M 個)」の点の列。点ごとに (位置, 軸, 太さ) の行を返す
+# (火花の尾と同じ: 軸 X が進む向き、Z がカメラの方。帯は Y の向きに太さだけ広がる)。
+STYLE_REAL = "real"     # 細い実写的: 細かいギザギザ (値ノイズを重ねる)
+STYLE_ANIME = "anime"   # 太いアニメ的: 大きなジグザグ (点ごとに左右へ交互)
+REAL_OCTAVES = 4
+
+
+def lightning_strike(frame, v):
+    """今光っている回 (c, 始まり) 。光っていなければ None。"""
+    sd = v["seed"]
+    t = v["start_frame"]
+    for c in range(int(v["count"])):
+        if c > 0:
+            t += max(1.0, v["interval"] * (1 + (h(c, 0, 51, sd) - 0.5) * 2 * v["interval_random"]))
+        if t > frame:
+            return None
+        if frame < t + v["duration"]:
+            return c, t
+    return None
+
+
+def lightning_ends(c, v, top, ground):
+    """回 c の (雲の点, 地面の点)。水平 (X / Z) にばらつく。"""
+    sd, sp = v["seed"], v["spread"]
+    t = add(top, ((h(c, 0, 52, sd) - 0.5) * sp, 0.0, (h(c, 0, 53, sd) - 0.5) * sp))
+    g = add(ground, ((h(c, 0, 54, sd) - 0.5) * 2 * sp, 0.0, (h(c, 0, 55, sd) - 0.5) * 2 * sp))
+    return t, g
+
+
+def _vnoise(x, c, k, sd):
+    """-1〜1 の値ノイズ (整数の所の乱数を直線でつなぐ)。"""
+    i = math.floor(x)
+    a = h(i, c, k, sd)
+    b = h(i + 1, c, k, sd)
+    return (a + (b - a) * (x - i)) * 2 - 1
+
+
+def lightning_offset(style, k, n, u, c, sd):
+    """点 k (全部で n 個、割合 u) の横のずれ (A, B の向き。長さ 1 あたり)。"""
+    if style == STYLE_ANIME:
+        if k == 0 or k == n - 1:
+            return 0.0, 0.0
+        s = 1.0 if k % 2 else -1.0
+        return s * (0.4 + 0.6 * h(k, c, 70, sd)), (h(k, c, 71, sd) - 0.5) * 0.3
+    env = min(1.0, 6 * u, 6 * (1 - u)) if k < n - 1 else 0.0
+    oa = sum((0.5 ** o) * _vnoise(u * 4 * 2 ** o, c, 60 + o * 2, sd) for o in range(REAL_OCTAVES))
+    ob = sum((0.5 ** o) * _vnoise(u * 4 * 2 ** o, c, 61 + o * 2, sd) for o in range(REAL_OCTAVES))
+    return oa * env, ob * env
+
+
+def lightning_branch_offset(style, m, n, u, c, sd):
+    """枝の点のずれ (根元は 0、先は動いてよい)。"""
+    if style == STYLE_ANIME:
+        if m == 0:
+            return 0.0, 0.0
+        s = 1.0 if m % 2 else -1.0
+        return s * (0.4 + 0.6 * h(m, c, 70, sd)), (h(m, c, 71, sd) - 0.5) * 0.3
+    env = min(1.0, 6 * u)
+    oa = sum((0.5 ** o) * _vnoise(u * 4 * 2 ** o, c, 60 + o * 2, sd) for o in range(REAL_OCTAVES))
+    ob = sum((0.5 ** o) * _vnoise(u * 4 * 2 ** o, c, 61 + o * 2, sd) for o in range(REAL_OCTAVES))
+    return oa * env, ob * env
+
+
+def lightning_frame(top, ground):
+    """本筋の (長さ, 向き, 横 A, 横 B)。"""
+    d = sub(ground, top)
+    length = mag(d)
+    d = unit(d) if length > 1e-9 else (0.0, -1.0, 0.0)
+    a = ortho(d, (1.0, 0.0, 0.0))
+    return length, d, a, cross(d, a)
+
+
+def lightning_main_point(style, k, n, c, v, top, ground):
+    length, d, a, b = lightning_frame(top, ground)
+    u = k / float(max(n - 1, 1))
+    oa, ob = lightning_offset(style, k, n, u, c, v["seed"])
+    jag = length * v["jag"]
+    return add(add(top, mul(sub(ground, top), u)), add(mul(a, oa * jag), mul(b, ob * jag)))
+
+
+def _strand_rows(pts, widths, cp, cdir):
+    out = []
+    n = len(pts)
+    for j in range(n):
+        j0, j1 = max(0, j - 1), min(n - 1, j + 1)
+        p = pts[j]
+        t = sub(pts[j0], pts[j1])
+        x = unit(t) if mag(t) > 1e-9 else (0.0, -1.0, 0.0)
+        tc = sub(cp, p)
+        if mag(tc) < 1e-6:
+            tc = mul(cdir, -1.0)
+        z = ortho(x, tc)
+        out.append((p, (x, cross(z, x), z), widths[j]))
+    return out
+
+
+def lightning_rows(style, frame, v, top, ground, cp, cdir, segments, branches, branch_segments):
+    """全部の点の行 [(位置, (X, Y, Z), 太さ)] (本筋 → 枝の順) と濃さ。光っていなければ太さ 0。"""
+    sd = v["seed"]
+    n, m = int(segments), int(branch_segments)
+    strike = lightning_strike(frame, v)
+    count = n + int(branches) * m
+    if strike is None:
+        return [(top, IDENTITY, 0.0)] * count, 0.0
+    c, ts = strike
+    t0, g0 = lightning_ends(c, v, top, ground)
+    length, d, a, b = lightning_frame(t0, g0)
+    prog = clamp(0, 1, (frame - ts) / max(v["grow_frames"], 0.01))
+    pts, widths = [], []
+    last = min(n - 1, int(math.floor((prog + 1e-9) * max(n - 1, 1))))   # 伸びた所までの点
+    for k in range(n):
+        u = k / float(max(n - 1, 1))
+        pts.append(lightning_main_point(style, k, n, c, v, t0, g0))
+        widths.append(v["width"] * (1 - (1 - v["taper"]) * u) if k <= last else 0.0)
+    for k in range(last + 1, n):
+        pts[k] = pts[last]
+    rows = _strand_rows(pts, widths, cp, cdir)
+    for br in range(int(branches)):
+        kb = int(math.floor((n - 1) * (0.15 + 0.6 * h(br, c, 80, sd))))
+        tb = kb / float(max(n - 1, 1))
+        start = pts[min(kb, last)]
+        db = unit(add(mul(d, 0.8), mul(add(mul(a, (h(br, c, 81, sd) - 0.5) * 2), mul(b, (h(br, c, 82, sd) - 0.5) * 2)), 0.9)))
+        lb = length * v["branch_length"] * (0.4 + 0.6 * h(br, c, 83, sd))
+        ab = ortho(db, (1.0, 0.0, 0.0))
+        bb = cross(db, ab)
+        pb = clamp(0, 1, (prog - tb) / 0.3)
+        cb = c * 13 + br + 1
+        bpts, bw = [], []
+        blast = min(m - 1, int(math.floor((pb + 1e-9) * max(m - 1, 1)))) if prog > tb else 0
+        for j in range(m):
+            u = j / float(max(m - 1, 1))
+            oa, ob = lightning_branch_offset(style, j, m, u, cb, sd)
+            jag = lb * v["jag"]
+            bpts.append(add(add(start, mul(db, lb * u)), add(mul(ab, oa * jag), mul(bb, ob * jag))))
+            bw.append(v["width"] * 0.5 * (1 - (1 - v["taper"]) * tb) * (1 - u) if prog > tb and j <= blast else 0.0)
+        for j in range(blast + 1, m):
+            bpts[j] = bpts[blast]
+        rows += _strand_rows(bpts, bw, cp, cdir)
+    return rows, lightning_alpha(frame, v, c, ts)
+
+
+def lightning_alpha(frame, v, c, ts):
+    """光っている回の濃さ (ちらつき: 2 フレーム目からは flicker の割合で消える。だんだん弱まる)。"""
+    phase = math.floor(frame - ts)
+    on = 1.0 if phase <= 0 or h(c, phase, 90, v["seed"]) >= v["flicker"] else 0.0
+    return v["opacity"] * on * (1 - 0.5 * clamp(0, 1, (frame - ts) / max(v["duration"], 0.01)))
+
+
+IDENTITY = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))

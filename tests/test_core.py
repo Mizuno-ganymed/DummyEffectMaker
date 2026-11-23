@@ -145,15 +145,16 @@ def test_tools_are_grouped_into_tabs():
                                         u"天候", u"爆発"]
     assert dict(tabs)[u"爆発"] == [
         u"コリジョンに指定", u"コリジョンを解除", u"爆発", u"爆発を更新", u"爆発を外す",
-        u"爆発のパラメータを保存", u"爆発のパラメータを読み込み"]
+        u"爆発のパラメータを保存", u"爆発のパラメータを読み込み",
+        u"核爆発", u"核爆発を更新", u"核爆発のパラメータを保存", u"核爆発のパラメータを読み込み"]
     assert dict(tabs)[u"天候"] == [
         u"風", u"風を更新", u"雨 (線と跳ね)", u"雨 (遠景の筒)", u"雪 (粒)", u"雪 (遠景の筒)",
         u"土煙 (スプライト)", u"土煙 (もこもこ)", u"火花 (線)", u"火花 (尾を引く)",
         u"霧 (霧の板)", u"霧 (遠景の重ね板)", u"地霧 (重ね板)", u"地霧 (這う霧)",
-        u"天候を更新", u"天候のパラメータを保存", u"天候のパラメータを読み込み"]
+        u"稲妻 (実写)", u"稲妻 (アニメ)", u"天候を更新", u"天候のパラメータを保存", u"天候のパラメータを読み込み"]
     weather_tools = [t for t in tools if t.tab == u"天候"]
     assert [c for c, _ in registry.group_by_category(weather_tools)] == [
-        u"風", u"雨", u"雪", u"土煙", u"火花", u"霧", u"地霧", u"調整"]
+        u"風", u"雨", u"雪", u"土煙", u"火花", u"霧", u"地霧", u"稲妻", u"調整"]
     assert dict(tabs)[u"お化けブラー"] == [
         u"残像", u"スミア (引き伸ばし)", u"軌跡", u"お化けブラーを更新",
         u"お化けブラーのパラメータを保存", u"お化けブラーのパラメータを読み込み"]
@@ -810,14 +811,14 @@ def test_ghost_blur_smear_points():
 
 
 def test_weather_params_are_live_rebuild_or_create():
-    assert len(wx.KINDS) == 13
+    assert len(wx.KINDS) == 16   # 天候 15 (稲妻 2 つを含む) + 核爆発 (同じ仕組み)
     for kind in wx.KINDS.values():
         names = set(p.name for p in kind.tool.params)
         stored = set(kind.live) | set(kind.rebuild)
         assert not set(kind.live) & set(kind.rebuild)
         assert stored <= names
         # 保存しないのは作成時だけの範囲の箱の設定
-        assert names - stored <= set(("area_width", "area_height", "follow_camera"))
+        assert names - stored <= set(("area_width", "area_height", "follow_camera", "height"))
         if kind.need_wind:
             assert "wind_influence" in kind.live
         assert "seed" in names
@@ -1071,3 +1072,70 @@ def test_exchange_file_roundtrip_and_errors():
         _write_json(path, {"format": xc.FORMAT_NAME, "version": xc.FORMAT_VERSION + 1})
         with pytest.raises(xc.ExchangeError):
             xc.read_shot(path)
+
+
+def test_nuke_timeline_and_mushroom_shape():
+    from dummy_effect_maker import motion as mo
+    from dummy_effect_maker.tools import nuke
+    v = nuke.NukeTool.default_values()
+    v.update(start_frame=10.0)
+    p0, axes = (0.0, 0.0, 0.0), ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    # 開始前は何も見えない。閃光は最初だけ
+    assert not mo.nuke_flash(9, v, p0, axes)[2] and not mo.nuke_cap(0, 28, 9, v, p0, axes)[2]
+    assert mo.nuke_flash(12, v, p0, axes)[2] and not mo.nuke_flash(10 + v["flash_frames"] + 1, v, p0, axes)[2]
+    # 雲は上がっていく (かさの高さは単調に増え、最後は大きさ × 高さに近づく)
+    hs = [mo.nuke_state(f, v)["H"] for f in (12, 40, 100, 250)]
+    assert hs == sorted(hs) and abs(hs[-1] - v["size"] * v["cloud_height"]) < 0.5
+    # 衝撃波の輪は地面 (爆心の X-Z 面) で広がって薄れる
+    a = mo.nuke_shock(15, v, p0, axes)
+    b = mo.nuke_shock(35, v, p0, axes)
+    assert b[2] > a[2] and b[4] < a[4] and abs(a[0][1] - v["size"] * 0.02) < 1e-9
+    # 雲の色: 最初は火の色、冷えると煙の色。最後の 1/4 で薄れる
+    c0, _, al0 = mo.nuke_colors(10, v)
+    c1, _, al1 = mo.nuke_colors(10 + v["cool_frames"] + 5, v)
+    assert _close(c0[0], v["fire_color"][0]) and _close(c1[2], v["cloud_color"][2]) and al0 == v["opacity"]
+    assert mo.nuke_colors(10 + v["life_frames"] * 0.9, v)[2] < 0.5
+    # 爆心を傾けると、雲はその上の向きに上がる
+    tilt = ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, -1.0, 0.0))
+    p, _, _, _ = mo.nuke_fireball(80, v, (5.0, 0.0, 0.0), tilt)
+    assert p[2] > v["size"] and abs(p[1]) < 1e-9
+
+
+def test_nuke_hemisphere_and_params():
+    from dummy_effect_maker.tools import nuke
+    pts, faces = nuke.hemisphere_points(12, 4)
+    assert len(pts) == 1 + 12 * 4 and all(p[1] >= -1e-9 for p in pts)
+    assert all(abs(sum(c * c for c in p) - 1) < 1e-9 for p in pts)
+    assert set(nuke.KIND.rebuild) == set(("stem_count", "cap_count", "base_count"))
+    assert not nuke.KIND.need_wind and nuke.KIND.need_camera
+
+
+def test_lightning_strikes_and_shapes():
+    from dummy_effect_maker import motion as mo
+    from dummy_effect_maker.tools import lightning as lt
+    v = lt.LightningRealTool.default_values()
+    v.update(count=3, interval=20.0, interval_random=0.0, start_frame=5.0)
+    # 落ちる回: 開始から間隔ごと、光るフレーム数だけ
+    assert mo.lightning_strike(4, v) is None and mo.lightning_strike(5, v) == (0, 5.0)
+    assert mo.lightning_strike(5 + v["duration"] + 1, v) is None and mo.lightning_strike(26, v)[0] == 1
+    assert mo.lightning_strike(70, v) is None      # 回数を過ぎたら落ちない
+    top, gnd, cp, cdir = (0.0, 40.0, 0.0), (0.0, 0.0, 0.0), (0.0, 10.0, 60.0), (0.0, 0.0, -1.0)
+    n, nb, m = 30, 4, 8
+    rows, alpha = mo.lightning_rows(mo.STYLE_REAL, 8, v, top, gnd, cp, cdir, n, nb, m)
+    assert len(rows) == n + nb * m and alpha > 0
+    t0, g0 = mo.lightning_ends(0, v, top, gnd)
+    assert _close(rows[0][0][1], 40.0) and _close(rows[n - 1][0][1], 0.0)    # 雲から地面まで
+    assert all(abs(t0[0] - 0) <= v["spread"] / 2 for _ in [0]) and abs(g0[0]) <= v["spread"]
+    assert rows[0][2] > rows[n - 1][2] > 0                                    # 地面の方が細い
+    # 伸び始め: 最初の点だけ太さがある。光っていない時は全部 0
+    early, _ = mo.lightning_rows(mo.STYLE_REAL, 5, v, top, gnd, cp, cdir, n, nb, m)
+    assert [w > 0 for _, _, w in early[:n]].count(True) == 1
+    dark, a0 = mo.lightning_rows(mo.STYLE_REAL, 15, v, top, gnd, cp, cdir, n, nb, m)
+    assert a0 == 0 and all(w == 0 for _, _, w in dark)
+    # アニメ: 本筋の点は左右に交互にずれる (ジグザグ)
+    va = lt.LightningAnimeTool.default_values()
+    va.update(count=1, start_frame=1.0, spread=0.0)
+    rows, _ = mo.lightning_rows(mo.STYLE_ANIME, 6, va, top, gnd, cp, cdir, 12, 2, 5)
+    _, d, a, _ = mo.lightning_frame(top, gnd)
+    side = [mo.dot(mo.sub(rows[k][0], mo.add(top, mo.mul(mo.sub(gnd, top), k / 11.0))), a) for k in range(1, 11)]
+    assert all(x * y < 0 for x, y in zip(side[:-1], side[1:]))
