@@ -8,6 +8,7 @@ from ..core import ToolContext, ToolError, execute
 from ..core import registry
 from .param_dialog import ParamDialog
 from .qt import QtCore, QtWidgets
+from .settings_page import SettingsPage
 
 WINDOW_OBJECT_NAME = "DummyEffectMakerMainWindow"
 WINDOW_TITLE = "Dummy Effect Maker"
@@ -27,18 +28,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._build_menu()
 
-        self.tool_area = QtWidgets.QWidget()
-        self.tool_layout = QtWidgets.QVBoxLayout(self.tool_area)
-        scroll = QtWidgets.QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(self.tool_area)
-
         self.log_view = QtWidgets.QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(1000)
 
+        # 上部のタブ: ツールの tab ごと (ツール / カメラ ...) + 環境設定
+        self.tabs = QtWidgets.QTabWidget()
+        self.tool_areas = {}  # タブ名 → ボタンを並べるウィジェット
+        self.settings_page = SettingsPage(log=self.log)
+
         splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
-        splitter.addWidget(scroll)
+        splitter.addWidget(self.tabs)
         splitter.addWidget(self.log_view)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
@@ -56,13 +56,23 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def populate(self):
         self.tools = registry.discover(TOOLS_PACKAGE, on_error=self._on_load_error)
-        for category, tools in registry.group_by_category(self.tools):
-            box = QtWidgets.QGroupBox(category)
-            box_layout = QtWidgets.QVBoxLayout(box)
-            for tool in tools:
-                box_layout.addLayout(self._make_tool_row(tool))
-            self.tool_layout.addWidget(box)
-        self.tool_layout.addStretch(1)
+        for tab, tab_tools in registry.group_by_tab(self.tools):
+            area = QtWidgets.QWidget()
+            layout = QtWidgets.QVBoxLayout(area)
+            for category, tools in registry.group_by_category(tab_tools):
+                box = QtWidgets.QGroupBox(category)
+                box_layout = QtWidgets.QVBoxLayout(box)
+                for tool in tools:
+                    box_layout.addLayout(self._make_tool_row(tool))
+                layout.addWidget(box)
+            layout.addStretch(1)
+            scroll = QtWidgets.QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(area)
+            self.tabs.addTab(scroll, tab)
+            self.tool_areas[tab] = area
+        self.tabs.addTab(self.settings_page, u"環境設定")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         self.log(u"%d 個のツールを読み込みました (host: %s)"
                  % (len(self.tools), self.host.name))
 
@@ -113,6 +123,11 @@ class MainWindow(QtWidgets.QMainWindow):
         run_dialog = getattr(dialog, "exec", None) or dialog.exec_
         if run_dialog() == ParamDialog.APPLY:
             self.run_tool(tool)
+
+    def _on_tab_changed(self, index):
+        # 別のウインドウや手作業で設定ファイルが変わっていても最新を表示する
+        if self.tabs.widget(index) is self.settings_page:
+            self.settings_page.refresh()
 
     def _on_load_error(self, module_name, tb):
         self.log(u"ツール %s の読み込みに失敗しました\n%s" % (module_name, tb))

@@ -1,273 +1,333 @@
 # -*- coding: utf-8 -*-
-"""バルカン砲: ロケータ A → B (経由) → C へ弾を一定間隔で撃ち続ける。
+"""バルカン砲: 発射位置から目標へ、まっすぐ弾を一定間隔で撃ち続ける。
+
+追尾弾との違い:
+    追尾弾は軌道カーブがロケータにつながっているので、飛んでいる最中の弾も
+    ロケータを動かすと軌道が変わる。
+    バルカン砲の弾は「発射したフレームでのロケータの位置」を使って飛ぶので、
+    発射後にロケータが動いても、その弾の軌道は変わらない
+    (ロケータにキーを打って動かすと、発射のたびにその時の位置へ撃つ)。
 
 構成:
-    dfx_vulcanN                  ルート (移動ロック)
-      dfx_vulcanN_path           軌道カーブ (A/B/C にライブ接続。テンプレート表示)
+    dfx_vulcanN                  ルート (移動ロック。パラメータをアトリビュートで持つ)
+      dfx_vulcanN_muzzle         発射位置のロケータ
+      dfx_vulcanN_target         目標のロケータ (赤)
       dfx_vulcanN_bulletSrc      弾の元メッシュ (非表示。インスタンス元)
       dfx_vulcanN_bullets
-        dfx_vulcanN_bullet_001   モーションパスで飛ぶ弾
+        dfx_vulcanN_bullet_001   弾 (1 発につき 1 つのエクスプレッションで動く)
         ...
 
-軌道カーブはロケータに接続されているので、作成後にロケータを動かすと
-弾道も追従する。弾は等速 (弧長基準) で飛び、発射フレームに出現し、
-C に到達した次のフレームで消える。
+弾のエクスプレッションは、自分の発射フレームでのロケータの位置を
+getAttr -time で読み、その 2 点を結ぶ直線上を進む (向きも進行方向に合わせる)。
+ロケータは UUID で探すので、名前を変えたり別の親の下に移したりしてもよい。
 """
 from __future__ import absolute_import
 
 from ..core import BaseTool, Param, ToolError
+from . import homing
 
-PATH_SMOOTH = u"なめらか"
-PATH_LINEAR = u"折れ線"
-SHAPE_SPHERE = u"球体"
-SHAPE_SQUASHED = u"つぶれた球体"
-# 弾はモーションパスの follow で X 軸が進行方向、Y 軸が上を向く
-SQUASH_AXES = [(u"進行方向", "x"), (u"上下", "y"), (u"左右", "z")]
+EFFECT_TYPE = "vulcan"
+CATEGORY = u"射撃"
 
-MAX_BULLETS = 2000
+SHAPE_SPHERE = homing.SHAPE_SPHERE
+SHAPE_SQUASHED = homing.SHAPE_SQUASHED
+SPEED_CONSTANT = homing.SPEED_CONSTANT
+SPEED_LINEAR = homing.SPEED_LINEAR
+SPEED_QUADRATIC = homing.SPEED_QUADRATIC
+
+LOCATOR_ATTRS = ("dfx_muzzle", "dfx_target")
+LOCATOR_LABELS = (u"発射位置", u"目標")
+CREATE_PARAMS = ("length",)
+# エクスプレッションがルートの値を直接読むので、すぐ反映される
+LIVE_PARAMS = ("color", "radius", "shape", "stretch", "subdivisions",
+               "travel_frames", "speed_mode", "min_speed")
+# 弾の数が変わるので「バルカン砲を更新」で反映
+REBUILD_PARAMS = ("start_frame", "end_frame", "interval", "use_instance")
 
 
 # ---------------------------------------------------------------- 純粋な計算
-def compute_fire_frames(start, end, interval):
-    """start から end まで (end を含む) interval ごとの発射フレーム。"""
-    if interval <= 0:
-        raise ValueError("interval must be positive")
-    frames = []
-    i = 0
-    while True:
-        f = start + i * interval
-        if f > end + 1e-6:
-            break
-        frames.append(round(f, 4))
-        i += 1
-    return frames
+def bullet_position(muzzle, target, frame, fire, travel, mode=SPEED_CONSTANT,
+                    min_ratio=1.0):
+    """発射フレーム fire の弾の、frame での位置 (エクスプレッションと同じ式。検証用)。
 
-
-def bezier_control_through(a, b, c):
-    """2 次ベジェが t=0.5 で b を通るための中間制御点。
-
-    P(0.5) = 0.25A + 0.5P1 + 0.25C = B  →  P1 = 2B - 0.5(A + C)
+    muzzle / target は発射フレームでのロケータの位置。
     """
-    return tuple(2.0 * b[i] - 0.5 * (a[i] + c[i]) for i in range(3))
+    t = (frame - fire) / max(travel, 0.001)
+    p = homing.travel_fraction(mode, min_ratio, t)
+    return tuple(a + (b - a) * p for a, b in zip(muzzle, target))
+
+
+def bullet_visible(frame, fire, travel):
+    """発射フレームに出現し、着弾した次のフレームで消える (追尾弾と同じ)。"""
+    return fire <= frame < fire + travel + 1
 
 
 # ---------------------------------------------------------------- ツール
+def _param(name, **overrides):
+    """追尾弾と共通のパラメータ (既定値だけ変えたものを含む)。"""
+    base = dict((p.name, p) for p in homing.HomingTool.params)[name]
+    kw = dict(label=base.label, default=base.default, kind=base.kind,
+              minimum=base.minimum, maximum=base.maximum, step=base.step,
+              decimals=base.decimals, choices=base.choices, tooltip=base.tooltip)
+    kw.update(overrides)
+    return Param(name, **kw)
+
+
 class VulcanTool(BaseTool):
     label = u"バルカン砲"
-    category = u"射撃"
-    order = 10
-    tooltip = (u"ロケータ A から B を経由して C まで、弾 (球体 / つぶれた球体) を"
-               u"指定フレームごとに撃ち続けます。\n"
-               u"ロケータ名が空欄なら A→B→C の順に選択したものを使います。")
+    category = CATEGORY
+    order = 20
+    tooltip = (u"発射位置と目標のロケータと、まっすぐ飛ぶ弾をまとめて作成します。\n"
+               u"弾は発射した時点のロケータの位置へ飛ぶので、発射後にロケータを\n"
+               u"動かしても、飛んでいる弾の軌道は変わりません (追尾弾との違い)。\n"
+               u"作成後はルート (dfx_vulcanN) のチャンネルボックスで調整できます。")
     params = [
-        Param("locator_a", u"ロケータA (発射位置)", "",
-              tooltip=u"3 つとも空欄なら選択順 (A→B→C) を使用"),
-        Param("locator_b", u"ロケータB (経由点)", ""),
-        Param("locator_c", u"ロケータC (着弾点)", ""),
-        Param("path_type", u"軌道", PATH_SMOOTH, kind="choice",
-              choices=[PATH_SMOOTH, PATH_LINEAR],
-              tooltip=u"なめらか: B を通る曲線 / 折れ線: A-B-C を直線で結ぶ"),
-        Param("start_frame", u"発射開始フレーム", 1.0, decimals=2),
-        Param("end_frame", u"発射終了フレーム", 48.0, decimals=2),
-        Param("interval", u"発射間隔 (フレーム)", 2.0, minimum=0.1, step=0.5,
-              decimals=2, tooltip=u"何フレームごとに 1 発撃つか (小数可)"),
-        Param("travel_frames", u"着弾までのフレーム数", 8.0, minimum=0.1,
-              step=1.0, decimals=2, tooltip=u"1 発が A から C に到達するまでの時間"),
-        Param("shape", u"弾の形状", SHAPE_SPHERE, kind="choice",
-              choices=[SHAPE_SPHERE, SHAPE_SQUASHED]),
-        Param("radius", u"弾の半径", 0.1, minimum=0.001, step=0.05),
-        Param("squash", u"つぶれ率", 0.4, minimum=0.01, maximum=10.0, step=0.1,
-              tooltip=u"つぶれた球体の時のみ。1 未満でつぶれ、1 より大きいと伸びる"),
-        Param("squash_axis", u"つぶれ方向", SQUASH_AXES[0][0], kind="choice",
-              choices=[label for label, _ in SQUASH_AXES]),
-        Param("subdivisions", u"球の分割数", 12, minimum=4, maximum=64),
-        Param("color", u"色", (1.0, 0.75, 0.3), kind="color"),
-        Param("use_instance", u"インスタンスで作成", True,
-              tooltip=u"ON: 弾は元メッシュのインスタンス (軽い。元メッシュを"
-                      u"編集すると全弾に反映)"),
+        Param("length", u"発射位置〜目標の距離", 20.0, minimum=0.01,
+              tooltip=u"作成時のロケータの配置 (発射位置は原点、目標は X 方向にこの距離)"),
+        _param("start_frame"),
+        _param("end_frame"),
+        _param("interval", default=1.0),
+        _param("travel_frames", default=6.0,
+               tooltip=u"1 発が発射位置から目標に届くまでの時間"),
+        _param("speed_mode"),
+        _param("min_speed"),
+        _param("shape", default=SHAPE_SQUASHED),
+        _param("radius", default=0.08),
+        _param("stretch", default=4.0),
+        _param("subdivisions"),
+        _param("color", default=(1.0, 0.85, 0.4)),
+        _param("use_instance"),
     ]
 
     def run(self, ctx, **v):
         from maya import cmds
         from . import _maya_utils as mu
 
-        if v["end_frame"] < v["start_frame"]:
-            raise ToolError(u"発射終了フレームが開始フレームより前になっています")
-        frames = compute_fire_frames(v["start_frame"], v["end_frame"],
-                                     v["interval"])
-        if len(frames) > MAX_BULLETS:
-            raise ToolError(u"弾数が多すぎます (%d 発 / 上限 %d)。発射間隔を確認してください"
-                            % (len(frames), MAX_BULLETS))
-
-        locators = mu.resolve_transforms(
-            [v["locator_a"], v["locator_b"], v["locator_c"]], 3)
-        if len(set(locators)) != 3:
-            raise ToolError(u"A, B, C には別々のロケータを指定してください")
-
-        created = []  # 一括削除用にタグを付けるノード
+        frames = homing.check_fire_frames(v)
         root = cmds.group(empty=True, name="dfx_vulcan#")
-        prefix = root
+        root = cmds.ls(root, long=True)[0]
         mu.tag(root)
-
-        # --- 軌道カーブ
-        plugs = [mu.world_position_plug(n, created) for n in locators]
-        curve = self._build_path(cmds, plugs, v["path_type"] == PATH_SMOOTH,
-                                 prefix, root, created)
-        curve_shape = cmds.listRelatives(curve, shapes=True, fullPath=True)[0]
-
-        # --- 弾の元メッシュとマテリアル
-        _, sg = mu.create_surface_shader(prefix + "_mat", v["color"])
-        src = self._build_bullet_source(cmds, v, prefix, root)
-        cmds.sets(src, edit=True, forceElement=sg)
-
-        # --- 弾
-        bullets_grp = cmds.group(empty=True, name=prefix + "_bullets",
-                                 parent=root)
-        travel = v["travel_frames"]
-        bullets = []
-        for i, fire in enumerate(frames):
-            name = "%s_bullet_%03d" % (prefix, i + 1)
-            if v["use_instance"]:
-                bullet = cmds.instance(src, name=name)[0]
-            else:
-                bullet = cmds.duplicate(src, name=name)[0]
-            bullet = cmds.parent(bullet, bullets_grp)[0]
-            bullets.append(bullet)
-
-            motion_path = self._attach_motion_path(
-                cmds, bullet, curve_shape, fire, fire + travel,
-                "%s_motion_%03d" % (prefix, i + 1))
-            created.append(motion_path)
-
-            # 発射フレームで出現し、着弾の次のフレームで消える
-            for t, vis in ((fire - 1, 0), (fire, 1), (fire + travel + 1, 0)):
-                cmds.setKeyframe(bullet, attribute="visibility", time=t,
-                                 value=vis)
-            cmds.keyTangent(bullet, attribute="visibility",
-                            outTangentType="step")
-
-        # インスタンスごとにマテリアルを確実に割り当てる
-        cmds.sets(bullets, edit=True, forceElement=sg)
-        cmds.setAttr(src + ".visibility", 0)
-
-        mu.tag(*created)
+        mu.mark_effect_root(root, EFFECT_TYPE)
+        mu.add_param_attrs(root, stored_params(), v, LIVE_PARAMS)
+        locators = _create_locators(cmds, mu, root, v["length"])
         mu.lock_transform(root)
+
+        build_effect(cmds, mu, root, frames, v, locators)
         cmds.select(root)
-        ctx.log(u"  %s: %d 発 (フレーム %s 〜 %s, %s フレーム間隔)"
-                % (root, len(frames), frames[0], frames[-1], v["interval"]))
-        ctx.log(u"  軌道: %s" % u" → ".join(n.split("|")[-1] for n in locators))
+        _log_effect(ctx, root, frames, v)
         return root
 
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _attach_motion_path(cmds, bullet, curve_shape, start, end, name):
-        """bullet を curve_shape に沿って start → end で等速移動させる。
 
-        cmds.pathAnimation はアンドゥチャンク内で使うと、アンドゥ時に
-        それ以前の操作が戻らなくなる (Maya 2027 で確認) ため、
-        motionPath ノードを直接組む。設定は pathAnimation の
-        -fractionMode -follow -followAxis x -upAxis y
-        -worldUpType vector -worldUpVector 0 1 0 と同じ。
-        """
-        mp = cmds.createNode("motionPath", name=name)
-        cmds.setAttr(mp + ".fractionMode", 1)  # 弧長基準 (等速)
-        cmds.setAttr(mp + ".follow", 1)
-        cmds.setAttr(mp + ".frontAxis", 0)     # X
-        cmds.setAttr(mp + ".upAxis", 1)        # Y
-        cmds.setAttr(mp + ".worldUpType", 3)   # vector
-        cmds.setAttr(mp + ".worldUpVector", 0.0, 1.0, 0.0, type="double3")
-        cmds.connectAttr(curve_shape + ".worldSpace[0]", mp + ".geometryPath")
-        cmds.connectAttr(bullet + ".rotateOrder", mp + ".rotateOrder")
-        cmds.connectAttr(mp + ".allCoordinates", bullet + ".translate")
-        cmds.connectAttr(mp + ".rotate", bullet + ".rotate")
-        # Maya のマニピュレータ表示用 (pathAnimation と同じ接続)
-        cmds.connectAttr(mp + ".message", bullet + ".specifiedManipLocation")
-        cmds.setKeyframe(mp, attribute="uValue", time=start, value=0.0,
-                         inTangentType="linear", outTangentType="linear")
-        cmds.setKeyframe(mp, attribute="uValue", time=end, value=1.0,
-                         inTangentType="linear", outTangentType="linear")
-        return mp
-
-    @staticmethod
-    def _build_path(cmds, plugs, smooth, prefix, root, created):
-        a, b, c = [cmds.getAttr(p)[0] for p in plugs]
-        if smooth:
-            mid = bezier_control_through(a, b, c)
-            curve = cmds.curve(degree=2, point=[a, mid, c], knot=[0, 0, 1, 1],
-                               name=prefix + "_path")
-        else:
-            curve = cmds.curve(degree=1, point=[a, b, c], knot=[0, 1, 2],
-                               name=prefix + "_path")
-        curve = cmds.parent(curve, root)[0]
-        cmds.setAttr(curve + ".inheritsTransform", 0)
-        cmds.setAttr(curve + ".overrideEnabled", 1)
-        cmds.setAttr(curve + ".overrideDisplayType", 1)  # テンプレート
-        shape = cmds.listRelatives(curve, shapes=True, fullPath=True)[0]
-
-        # ロケータとライブ接続 (ロケータを動かすと弾道が追従する)
-        cmds.connectAttr(plugs[0], shape + ".controlPoints[0]")
-        cmds.connectAttr(plugs[2], shape + ".controlPoints[2]")
-        if smooth:
-            # P1 = 2B - 0.5(A + C) をノードで組む
-            sum_ac = cmds.createNode("plusMinusAverage", name=prefix + "_sumAC")
-            cmds.connectAttr(plugs[0], sum_ac + ".input3D[0]")
-            cmds.connectAttr(plugs[2], sum_ac + ".input3D[1]")
-            half_ac = cmds.createNode("multiplyDivide", name=prefix + "_halfAC")
-            cmds.setAttr(half_ac + ".input2", 0.5, 0.5, 0.5)
-            cmds.connectAttr(sum_ac + ".output3D", half_ac + ".input1")
-            double_b = cmds.createNode("multiplyDivide", name=prefix + "_doubleB")
-            cmds.setAttr(double_b + ".input2", 2.0, 2.0, 2.0)
-            cmds.connectAttr(plugs[1], double_b + ".input1")
-            mid_cv = cmds.createNode("plusMinusAverage", name=prefix + "_midCV")
-            cmds.setAttr(mid_cv + ".operation", 2)  # subtract
-            cmds.connectAttr(double_b + ".output", mid_cv + ".input3D[0]")
-            cmds.connectAttr(half_ac + ".output", mid_cv + ".input3D[1]")
-            cmds.connectAttr(mid_cv + ".output3D", shape + ".controlPoints[1]")
-            created.extend([sum_ac, half_ac, double_b, mid_cv])
-        else:
-            cmds.connectAttr(plugs[1], shape + ".controlPoints[1]")
-        return curve
-
-    @staticmethod
-    def _build_bullet_source(cmds, v, prefix, root):
-        div = v["subdivisions"]
-        src = cmds.polySphere(radius=v["radius"], subdivisionsAxis=div,
-                              subdivisionsHeight=max(2, div // 2),
-                              constructionHistory=False,
-                              name=prefix + "_bulletSrc")[0]
-        if v["shape"] == SHAPE_SQUASHED:
-            axis = dict(SQUASH_AXES)[v["squash_axis"]]
-            scale = [1.0, 1.0, 1.0]
-            scale["xyz".index(axis)] = v["squash"]
-            cmds.setAttr(src + ".scale", *scale, type="double3")
-            # インスタンスでも形状が共有されるよう頂点に焼き込む
-            cmds.makeIdentity(src, apply=True, scale=True)
-        return cmds.parent(src, root)[0]
-
-
-class VulcanLocatorsTool(BaseTool):
-    label = u"バルカン用ロケータ作成"
-    category = u"射撃"
-    order = 20
-    tooltip = (u"A (発射位置) / B (経由点) / C (着弾点) のロケータを作成し、"
-               u"A→B→C の順に選択した状態にします。")
-    params = [
-        Param("length", u"A〜C の距離", 10.0, minimum=0.01),
-        Param("height", u"B の高さ", 2.0),
-    ]
+class VulcanUpdateTool(BaseTool):
+    label = u"バルカン砲を更新"
+    category = CATEGORY
+    order = 25
+    tooltip = (u"選択したバルカン砲を、ルートのアトリビュートの値で作り直します。\n"
+               u"「(更新)」の付いた項目 (発射の開始・終了・間隔など) を変えたあとに使います。")
 
     def run(self, ctx, **v):
         from maya import cmds
+        from . import _maya_utils as mu
 
-        length, height = v["length"], v["height"]
-        specs = [("A", (0.0, 0.0, 0.0)),
-                 ("B", (length * 0.5, height, 0.0)),
-                 ("C", (length, 0.0, 0.0))]
-        locs = []
-        for suffix, pos in specs:
-            loc = cmds.spaceLocator(name="vulcan_loc%s#" % suffix)[0]
-            cmds.xform(loc, worldSpace=True, translation=pos)
-            locs.append(loc)
-        cmds.select(locs, replace=True)
-        ctx.log(u"  作成: %s" % ", ".join(locs))
-        return locs
+        return rebuild_effects(cmds, mu, ctx, _selected_roots(mu, u"更新する"))
+
+
+class VulcanSavePresetTool(BaseTool):
+    label = u"バルカン砲のパラメータを保存"
+    category = CATEGORY
+    order = 26
+    undoable = False  # シーンは変えない
+    tooltip = u"選択したバルカン砲のパラメータをプリセットファイル (.json) に保存します。"
+
+    def run(self, ctx, **v):
+        from . import _maya_utils as mu
+
+        roots = _selected_roots(mu, u"保存する")
+        return mu.save_preset_dialog(ctx, roots, EFFECT_TYPE, stored_params(),
+                                     self.label, u"バルカン砲")
+
+
+class VulcanLoadPresetTool(BaseTool):
+    label = u"バルカン砲のパラメータを読み込み"
+    category = CATEGORY
+    order = 27
+    tooltip = (u"プリセットファイル (.json) のパラメータを選択したバルカン砲に設定し、\n"
+               u"作り直します (複数選択可。ロケータの位置はそのまま)。")
+
+    def run(self, ctx, **v):
+        from maya import cmds
+        from . import _maya_utils as mu
+
+        roots = _selected_roots(mu, u"読み込み先の")
+        values = mu.load_preset_dialog(ctx, EFFECT_TYPE, stored_params(), self.label)
+        if values is None:
+            return None
+        return rebuild_effects(cmds, mu, ctx, roots, overrides=values)
+
+
+# ---------------------------------------------------------------- 構築
+def stored_params():
+    by_name = dict((p.name, p) for p in VulcanTool.params)
+    return [by_name[n] for n in LIVE_PARAMS + REBUILD_PARAMS]
+
+
+def _short(node):
+    return node.split("|")[-1]
+
+
+def _selected_roots(mu, purpose):
+    roots = mu.selected_effect_roots(EFFECT_TYPE)
+    if not roots:
+        raise ToolError(u"%sバルカン砲 (dfx_vulcanN か、その中のロケータや弾) を選択してください"
+                        % purpose)
+    return roots
+
+
+def _create_locators(cmds, mu, root, length):
+    """root の子に発射位置と目標のロケータを作り、root のアトリビュートに接続する。"""
+    prefix = _short(root)
+    locators = []
+    for suffix, pos, attr in (("muzzle", (0.0, 0.0, 0.0), LOCATOR_ATTRS[0]),
+                              ("target", (length, 0.0, 0.0), LOCATOR_ATTRS[1])):
+        loc = cmds.spaceLocator(name="%s_%s" % (prefix, suffix))[0]
+        loc = cmds.parent(loc, root, relative=True)[0]
+        loc = cmds.ls(loc, long=True)[0]
+        cmds.setAttr(loc + ".translate", *pos, type="double3")
+        mu.tag(loc)
+        cmds.addAttr(root, longName=attr, attributeType="message")
+        cmds.connectAttr(loc + ".message", root + "." + attr)
+        locators.append(loc)
+    shape = cmds.listRelatives(locators[1], shapes=True, fullPath=True)[0]
+    cmds.setAttr(shape + ".overrideEnabled", 1)
+    cmds.setAttr(shape + ".overrideColor", 13)  # 赤
+    return locators
+
+
+def _stored_locators(cmds, root):
+    result = []
+    for attr, label in zip(LOCATOR_ATTRS, LOCATOR_LABELS):
+        conns = cmds.listConnections(root + "." + attr, source=True,
+                                     destination=False) or []
+        if not conns:
+            raise ToolError(u"%s の%sロケータが見つかりません (削除された可能性があります)"
+                            % (_short(root), label))
+        result.append(cmds.ls(conns[0], long=True)[0])
+    if result[0] == result[1]:
+        raise ToolError(u"発射位置と目標には別々のロケータを指定してください")
+    return result
+
+
+def _log_effect(ctx, root, frames, v):
+    ctx.log(u"  %s: %d 発 (フレーム %s 〜 %s, %s フレーム間隔)"
+            % (_short(root), len(frames), frames[0], frames[-1], v["interval"]))
+
+
+def rebuild_effects(cmds, mu, ctx, roots, overrides=None):
+    """roots をアトリビュートの値で作り直す (ロケータはそのまま)。"""
+    params = stored_params()
+    jobs = []
+    for root in roots:
+        if mu.is_baked(root):
+            raise ToolError(u"%s はベイク済みのため作り直せません (Ctrl+Z でベイク前に戻せます)"
+                            % _short(root))
+        values = mu.read_param_values(root, params)
+        driven = mu.driven_params(root, params) if overrides else []
+        if overrides:
+            values.update((k, v) for k, v in overrides.items() if k not in driven)
+        jobs.append((root, values, homing.check_fire_frames(values),
+                     _stored_locators(cmds, root), driven))
+
+    for root, values, frames, locators, driven in jobs:
+        mu.delete_owned(root)
+        mu.sync_param_attrs(root, params, values, LIVE_PARAMS, keep=LOCATOR_ATTRS)
+        if overrides:
+            mu.write_param_values(root, params, values, skip=driven)
+        build_effect(cmds, mu, root, frames, values, locators)
+        _log_effect(ctx, root, frames, values)
+        ignored = [p.label for p in params if p.name in driven and p.name in overrides]
+        if ignored:
+            ctx.log(u"  ※ キーが打たれているため変更しませんでした: %s"
+                    % u", ".join(ignored))
+    result = [job[0] for job in jobs]
+    cmds.select(result)
+    return result
+
+
+def build_effect(cmds, mu, root, frames, v, locators):
+    """root の下に弾とエクスプレッションを作る (作成時と更新時で共通)。"""
+    def attr(name):
+        return "%s.%s%s" % (root, mu.PARAM_PREFIX, name)
+
+    prefix = _short(root)
+    owned = []
+    src, sphere, sg, scale_plug = homing.build_bullet_source(
+        cmds, mu, root, v, attr, prefix, owned)
+
+    # ルートは原点に固定 (移動ロック) なので、弾の translate = ワールド座標
+    bullets_grp = cmds.group(empty=True, name=prefix + "_bullets", parent=root)
+    owned.append(bullets_grp)
+    bullets = []
+    for i, fire in enumerate(frames):
+        bullet = homing.make_bullet(cmds, src, sphere, "%s_bullet_%03d" % (prefix, i + 1),
+                                    bullets_grp, v["use_instance"])
+        bullet = cmds.ls(bullet, long=True)[0]
+        # 回転は Z (上下の傾き) → Y (左右の向き) の順に効かせる
+        cmds.setAttr(bullet + ".rotateOrder", 5)  # zyx
+        bullets.append(bullet)
+        cmds.connectAttr(scale_plug, bullet + ".scale")
+        expr = cmds.expression(name="%s_motion_%03d" % (prefix, i + 1),
+                               string=_expression(mu, root, locators, bullet, fire),
+                               alwaysEvaluate=True, unitConversion="all")
+        owned.append(expr)
+
+    cmds.sets(bullets, edit=True, forceElement=sg)
+    cmds.setAttr(src + ".visibility", 0)
+    owned = [n for n in owned if cmds.objExists(n)]
+    mu.tag(*owned)
+    mu.own(root, *owned)
+    return bullets
+
+
+def _expression(mu, root, locators, bullet, fire):
+    """1 発分のエクスプレッション。
+
+    発射フレームでのロケータのワールド位置を getAttr -time で読むので、
+    その後ロケータが動いても軌道は変わらない。ロケータの translate を読むのは
+    依存関係を作るため (ロケータを動かしたら再計算させる)。
+    """
+    r, b = _short(root), _short(bullet)
+    m, t = [_short(n) for n in locators]
+    find = (mu.mel_find_node("$mn", locators[0], "%s.%s" % (root, LOCATOR_ATTRS[0]))
+            + mu.mel_find_node("$tn", locators[1], "%s.%s" % (root, LOCATOR_ATTRS[1])))
+    return find + u"""
+float $dep = {m}.translateX + {m}.translateY + {m}.translateZ
+           + {t}.translateX + {t}.translateY + {t}.translateZ;
+float $f = frame;
+float $t0 = {fire!r};
+float $tr = max({r}.dfx_travel_frames, 0.001);
+float $a[] = {{0, 0, 0}};
+float $c[] = {{0, 0, 0}};
+if (`objExists $mn` && `objExists $tn`) {{
+    float $ma[] = `getAttr -time $t0 ($mn + ".worldMatrix[0]")`;
+    float $mc[] = `getAttr -time $t0 ($tn + ".worldMatrix[0]")`;
+    $a = {{$ma[12], $ma[13], $ma[14]}};
+    $c = {{$mc[12], $mc[13], $mc[14]}};
+}}
+float $u = clamp(0, 1, ($f - $t0) / $tr);
+float $m = clamp(0, 1, {r}.dfx_min_speed / 100.0);
+float $p = $u;
+if ({r}.dfx_speed_mode == 1)
+    $p = ($u - (1 - $m) * $u * $u / 2) / ((1 + $m) / 2);
+else if ({r}.dfx_speed_mode == 2)
+    $p = ($m * $u + (1 - $m) * (1 - pow(1 - $u, 3)) / 3) / ($m + (1 - $m) / 3);
+float $dx = $c[0] - $a[0];
+float $dy = $c[1] - $a[1];
+float $dz = $c[2] - $a[2];
+{b}.translateX = $a[0] + $dx * $p;
+{b}.translateY = $a[1] + $dy * $p;
+{b}.translateZ = $a[2] + $dz * $p;
+{b}.rotateX = 0;
+{b}.rotateY = atan2d(-$dz, $dx);
+{b}.rotateZ = atan2d($dy, hypot($dx, $dz));
+{b}.visibility = ($f >= $t0) && ($f < $t0 + $tr + 1);
+""".format(r=r, b=b, m=m, t=t, fire=float(fire))

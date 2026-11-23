@@ -27,6 +27,14 @@ class DeleteAllDummiesTool(BaseTool):
             ctx.log(u"  キャンセルしました")
             return 0
 
+        # 画ぶれ・手ブレはカメラ側のチャンネルを元に戻してから消す
+        from . import camera_shake
+        for root in mu.all_effect_roots():
+            if (cmds.getAttr(root + "." + mu.EFFECT_TYPE_ATTR) in camera_shake.SHAKE_TYPES
+                    and not mu.is_baked(root)):
+                camera_shake.release(cmds, mu, root)
+        nodes = [n for n in nodes if cmds.objExists(n)]
+
         # 先に DAG を消すと子や接続ノードが連鎖で消えるので、残ったものだけ消す
         dag = [n for n in nodes if cmds.objectType(n, isAType="dagNode")]
         if dag:

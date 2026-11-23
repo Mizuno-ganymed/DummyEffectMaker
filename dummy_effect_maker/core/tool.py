@@ -84,7 +84,8 @@ class BaseTool(object):
 
     サブクラスで設定する属性:
         label     : ボタンに表示する名前 (必須。空のクラスは登録されない)
-        category  : ウインドウ内のグループ名
+        tab       : ランチャー上部のタブ名
+        category  : タブ内のグループ名
         tooltip   : ボタンのツールチップ
         order     : カテゴリ内の並び順 (小さいほど上)
         hosts     : 動作するホスト ("maya", "standalone")。None なら全ホスト
@@ -93,6 +94,7 @@ class BaseTool(object):
     """
 
     label = ""
+    tab = u"ツール"
     category = "その他"
     tooltip = ""
     order = 100
