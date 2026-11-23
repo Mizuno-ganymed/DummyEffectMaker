@@ -1293,9 +1293,35 @@ def test_tunnel_lines_flow_toward_vanishing_point():
     for shape, faces in ((tl.SHAPE_LINE, tl.WIDTH_SAMPLES - 1), (tl.SHAPE_STAR, 10), (tl.SHAPE_HEART, 24),
                          (tl.SHAPE_DIAMOND, 4)):
         assert len(tl.shape_points(shape)[1]) == faces
-    assert set(tl.KIND.rebuild) == set(("shape", "count")) and "direction" in tl.KIND.live
+    assert set(tl.KIND.rebuild) == set(("shape", "count", "trail", "ghost_count")) and "direction" in tl.KIND.live
     for name in ("roll", "roll_speed", "speed_random", "width_start", "width_mid", "width_end", "thickness_random", "length_random"):
         assert name in tl.KIND.live
+
+
+def test_tunnel_lines_ghosts_and_tails():
+    from dummy_effect_maker import motion as mo
+    from dummy_effect_maker.tools import tunnel_lines as tl
+    v = dict(tl.TunnelLinesTool.default_values(), shape=tl.SHAPE_STAR, ghost_count=4, ghost_step=2.5,
+             ghost_fade=0.8, ghost_shrink=0.5, roll_speed=3.0)
+    # 残像・尾を使うか (尾は形の時だけ)
+    assert tl.ghost_levels(dict(v, trail=tl.TRAIL_NONE)) == 0 and not tl.has_tail(dict(v, trail=tl.TRAIL_NONE))
+    assert tl.ghost_levels(dict(v, trail=tl.TRAIL_GHOST)) == 4 and not tl.has_tail(dict(v, trail=tl.TRAIL_GHOST))
+    assert tl.ghost_levels(dict(v, trail=tl.TRAIL_TAIL)) == 0 and tl.has_tail(dict(v, trail=tl.TRAIL_TAIL))
+    assert tl.ghost_levels(dict(v, trail=tl.TRAIL_BOTH)) == 4 and tl.has_tail(dict(v, trail=tl.TRAIL_BOTH))
+    assert not tl.has_tail(dict(v, trail=tl.TRAIL_BOTH, shape=tl.SHAPE_LINE))
+    assert tl.ghost_levels(dict(v, trail=tl.TRAIL_GHOST, shape=tl.SHAPE_LINE)) == 4
+    # 残像 k 段目 = 間隔 × k フレーム前の形を小さくしたもの (回っていれば通り道に沿って並ぶ)
+    for k in (1, 2, 4):
+        p, axes, sc = mo.tunnel_ghost(7, 30, k, v, False)
+        q, axes2, sc2 = mo.tunnel_item(7, 30 - 2.5 * k, v, False)
+        m = 1 - 0.5 * k / 5.0
+        assert _close3(p, q, 1e-12) and all(abs(sc[j] - sc2[j] * m) < 1e-12 for j in range(3))
+        assert _close3(axes[0], axes2[0], 1e-12)
+    # 後ろほど薄い・小さい。薄くなり方 0 なら全部同じ濃さ
+    ops = [mo.tunnel_ghost_opacity(k, v) for k in range(1, 5)]
+    assert all(a > b for a, b in zip(ops, ops[1:])) and ops[-1] > 0
+    assert mo.tunnel_ghost_opacity(3, dict(v, ghost_fade=0.0)) == v["opacity"]
+    assert all(mo.tunnel_ghost_scale(k, v) > mo.tunnel_ghost_scale(k + 1, v) for k in range(1, 4))
 
 
 def test_tunnel_lines_roll_and_width():

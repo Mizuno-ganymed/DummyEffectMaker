@@ -5,6 +5,8 @@ Maya 版 (tools/tunnel_lines.py) と同じパラメータ・同じ計算 (motion
     dfx_tunnelN           ルート (パラメータ。dfx_camera = カメラ)
       dfx_tunnelN_vanish  消失点 (Empty。チャイルドオブでカメラに付く。位置はカメラの空間で、-Z が前)
       dfx_tunnelN_items   線・形 (全部で 1 つのメッシュ。毎フレーム頂点を置き直す)
+      dfx_tunnelN_ghostK  残像 K 段目 (残像を選んだ時。段ごとにマテリアルが別 = 後ろほど薄い)
+      dfx_tunnelN_tails   尾 (尾を選んだ時。形の後ろに引く線)
 カメラの空間 (X 右・Y 上・-Z 前) は Maya と同じなので、Y が上への直しはいらない。
 """
 from __future__ import absolute_import
@@ -51,11 +53,25 @@ class TunnelLinesTool(BaseTool):
 
 
 def build(root, v):
-    pts, faces = mt.shape_points(v["shape"])
     mat = rt.flat_material(root.name + "_mat", v["color"], v["opacity"], owner=root)
     count = int(v["count"])
-    obj = wx.particle_object(root, root.name + "_items", (pts, [tuple(f) for f in faces], None), count, mat)
-    obj.data["dfx_line"] = v["shape"] == mt.SHAPE_LINE
+    line = v["shape"] == mt.SHAPE_LINE
+
+    def make(suffix, is_line, material, ghost=0, tail=False):
+        pts, faces = mt.shape_points(mt.SHAPE_LINE if is_line else v["shape"])
+        obj = wx.particle_object(root, root.name + suffix, (pts, [tuple(f) for f in faces], None), count, material)
+        obj.data["dfx_line"] = is_line
+        obj.data["dfx_ghost"] = ghost
+        obj.data["dfx_tail"] = tail
+        return obj
+
+    make("_items", line, mat)
+    for k in range(1, mt.ghost_levels(v) + 1):   # 残像: 少し前の線・形のコピー
+        gm = rt.flat_material("%s_ghostMat%02d" % (root.name, k), v["color"], mo.tunnel_ghost_opacity(k, v),
+                              owner=root)
+        make("_ghost%02d" % k, line, gm, ghost=k)
+    if mt.has_tail(v):                            # 尾: 形の後ろに引く線
+        make("_tails", True, mat, tail=True)
 
 
 def camera_space(root):
@@ -78,12 +94,16 @@ def item_vertices(obj, v, frame, cm, vanish):
                   (0.0, 0.0, 0.0, 1.0)))
     world = cm @ tun
     line = bool(obj.data["dfx_line"])
+    ghost = int(obj.data.get("dfx_ghost", 0))
     pts = [tmpl[3 * k:3 * k + 3] for k in range(n)]
     if line:   # 線: X は左右の目印 (±1)。本当の X は ±太さ (入り Y = -1 → 終わり Y = 0)
         pts = [(t[0] * mo.tunnel_width_at(t[1] + 1.0, v), t[1], t[2]) for t in pts]
     out = []
     for i in range(obj.data["dfx_count"]):
-        p, axes, s = mo.tunnel_item(i, frame, v, line)
+        if ghost:
+            p, axes, s = mo.tunnel_ghost(i, frame, ghost, v, line)
+        else:
+            p, axes, s = mo.tunnel_item(i, frame, v, line)
         base = Vector(p)
         ax = [Vector(axes[k]) * s[k] for k in range(3)]
         for t in pts:
@@ -93,14 +113,15 @@ def item_vertices(obj, v, frame, cm, vanish):
 
 def update(root, frame):
     v = rt.read_params(root, mt.KIND.stored_params())
-    obj = wx.part(root, "_items")
     cm, vanish = camera_space(root)
-    if obj is None or cm is None:
+    if cm is None:
         return
-    rt.set_material(wx.material_of(obj), v["color"], v["opacity"])
-    co = [c for p in item_vertices(obj, v, frame, cm, vanish) for c in p]
-    obj.data.vertices.foreach_set("co", co)
-    obj.data.update()
+    for obj in wx.particle_objects(root):    # 線・形、残像の段、尾
+        ghost = int(obj.data.get("dfx_ghost", 0))
+        rt.set_material(wx.material_of(obj), v["color"], mo.tunnel_ghost_opacity(ghost, v) if ghost else v["opacity"])
+        co = [c for p in item_vertices(obj, v, frame, cm, vanish) for c in p]
+        obj.data.vertices.foreach_set("co", co)
+        obj.data.update()
 
 
 bd.register_builder(mt.EFFECT_TYPE, mt.KIND.stored_params, mt.KIND.live, build, update)

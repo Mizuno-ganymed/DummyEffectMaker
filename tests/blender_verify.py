@@ -1268,6 +1268,48 @@ def b19_tunnel_lines():
     obj = _wx.part(root, "_items")
     check("トンネル: 星にして更新 (20 個・消失点はそのまま)", obj.data["dfx_count"] == 20 and not obj.data["dfx_line"]
           and len(obj.data.polygons) == 20 * 10 and near(rt.control(root, "vanish").location, (3.0, 1.5, -20.0)))
+    # 残像と尾: 残像の段ごとのメッシュ (薄くなるマテリアル) と、尾の線のメッシュ
+    root["dfx_trail"] = mt.TRAIL_BOTH
+    root["dfx_ghost_count"] = 3
+    root["dfx_roll_speed"] = 3.0
+    select(root)
+    op(bscene.UpdateEffectsTool)
+    v = rt.read_params(root, mt.KIND.stored_params())
+    ghosts = [_wx.part(root, "_ghost%02d" % k) for k in (1, 2, 3)]
+    tails = _wx.part(root, "_tails")
+    bpy.context.scene.frame_set(23)
+    bpy.context.view_layer.update()
+    cm, van = bt.camera_space(root)
+    bx, by, bz = mo.tunnel_basis(van)
+    bad = []
+    for obj, kind in [(g, k) for k, g in enumerate(ghosts, 1)] + [(tails, "tail")]:
+        tmpl = list(obj.data["dfx_template"])
+        nt = len(tmpl) // 3
+        for i in range(20):
+            if kind == "tail":
+                p, axes, s = mo.tunnel_item(i, 23, v, True)
+            else:
+                p, axes, s = mo.tunnel_ghost(i, 23, kind, v, False)
+            for k in range(nt):
+                t = tmpl[3 * k:3 * k + 3]
+                if kind == "tail":
+                    t = (t[0] * mo.tunnel_width_at(t[1] + 1.0, v), t[1], t[2])
+                loc = [p[c] + sum(axes[a][c] * s[a] * t[a] for a in range(3)) for c in range(3)]
+                want = cm @ Vector([sum((bx, by, bz)[a][c] * loc[a] for a in range(3)) for c in range(3)])
+                if ((obj.matrix_world @ obj.data.vertices[i * nt + k].co) - want).length > 1e-3:
+                    bad.append((kind, i, k))
+                    break
+    alphas = [_wx.material_of(g).node_tree.nodes["dfx_mix"].inputs[0].default_value for g in ghosts]
+    check("トンネル: 残像と尾 (残像 3 段は前の位置で小さく・後ろほど薄い、尾は形の後ろの線。Maya 版と同じ計算)",
+          all(ghosts) and tails is not None and tails.data["dfx_line"] and not bad
+          and all(abs(a - mo.tunnel_ghost_opacity(k, v)) < 1e-6 for k, a in enumerate(alphas, 1))
+          and alphas[0] > alphas[1] > alphas[2], str((bad[:3], alphas)))
+    root["dfx_trail"] = mt.TRAIL_NONE
+    select(root)
+    op(bscene.UpdateEffectsTool)
+    check("トンネル: 残像なしにして更新すると、残像・尾は消える",
+          _wx.part(root, "_ghost01") is None and _wx.part(root, "_tails") is None
+          and _wx.part(root, "_items") is not None)
 
 
 @section

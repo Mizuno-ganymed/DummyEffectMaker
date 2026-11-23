@@ -10,6 +10,8 @@
       dfx_tunnelN_follow     カメラに張り付く (ペアレントコンストレイント)
         dfx_tunnelN_tunnel   トンネルの向き (消失点へのエイムコンストレイント。ローカル -Z が消失点の向き)
           dfx_tunnelN_items  線・形 (毎フレーム、トンネルの空間で置き直す)
+          dfx_tunnelN_ghostK 残像 K 段目 (残像を選んだ時。少し前の線・形のコピー。段ごとにマテリアルが別)
+          dfx_tunnelN_tails  尾 (尾を選んだ時。形の後ろに引く線)
 
 線・形は「手前の端」と「完全に消える距離」の間を流れ、1 周するごとに壁の上の位置が変わる。
 トンネルは軸の周りに回せる (回転 / 回転の速さ)。回り続けると、線・形はらせん (弧) を描いて流れ、
@@ -34,7 +36,12 @@ SHAPE_STAR = u"星"
 SHAPE_HEART = u"ハート"
 SHAPE_DIAMOND = u"菱形"
 SHAPES = [SHAPE_LINE, SHAPE_STAR, SHAPE_HEART, SHAPE_DIAMOND]
-REBUILD = ("shape", "count")
+TRAIL_NONE = u"なし"
+TRAIL_GHOST = u"残像 (コピー)"
+TRAIL_TAIL = u"尾 (線)"
+TRAIL_BOTH = u"残像と尾"
+TRAILS = [TRAIL_NONE, TRAIL_GHOST, TRAIL_TAIL, TRAIL_BOTH]
+REBUILD = ("shape", "count", "trail", "ghost_count")
 # 線の元メッシュの、長さ方向の頂点数 (多いほど太さの変化がなめらか)
 WIDTH_SAMPLES = 11
 H = wx.mel_hash
@@ -72,11 +79,33 @@ def shape_points(shape):
     return pts, [[0, 1 + k, 1 + (k + 1) % n] for k in range(n)]
 
 
+def ghost_levels(v):
+    """残像の段の数 (残像を使わない時は 0)。"""
+    return int(v["ghost_count"]) if v["trail"] in (TRAIL_GHOST, TRAIL_BOTH) else 0
+
+
+def has_tail(v):
+    """尾を引くか (線には引かない)。"""
+    return v["shape"] != SHAPE_LINE and v["trail"] in (TRAIL_TAIL, TRAIL_BOTH)
+
+
 def _params():
     return [
         Param("shape", u"形", SHAPE_LINE, kind="choice", choices=SHAPES,
               tooltip=u"流れる物の形 (線は流れる向きに伸びる。ほかは壁に貼り付いて流れる)"),
         Param("count", u"数", 80, minimum=1, maximum=600),
+        Param("trail", u"残像", TRAIL_NONE, kind="choice", choices=TRAILS,
+              tooltip=u"残像 (コピー): 少し前の位置に、薄く小さいコピーを並べる (線にも使える)\n"
+                      u"尾 (線): 形の後ろに線を引く (線の長さ・太さの設定を使う。形の時だけ)\n"
+                      u"残像と尾: 両方"),
+        Param("ghost_count", u"残像の数", 3, minimum=1, maximum=10,
+              tooltip=u"1 つの線・形の後ろに並べるコピーの数"),
+        Param("ghost_step", u"残像の間隔 (フレーム)", 2.0, minimum=0.0, step=0.5, decimals=2,
+              tooltip=u"コピーを何フレーム前の位置に置くか (1 段ごと)"),
+        Param("ghost_fade", u"残像の薄くなり方", 0.8, minimum=0.0, maximum=1.0, step=0.1,
+              tooltip=u"0 で全部同じ濃さ。1 で後ろほど薄くなる"),
+        Param("ghost_shrink", u"残像の小さくなり方", 0.3, minimum=0.0, maximum=1.0, step=0.1,
+              tooltip=u"0 で全部同じ大きさ。1 で後ろほど小さくなる"),
         Param("direction", u"流れる向き", mo.TUNNEL_AWAY, kind="choice", choices=[mo.TUNNEL_AWAY, mo.TUNNEL_TOWARD],
               tooltip=u"奥へ: カメラの近くから消失点へ遠ざかる / 手前へ: 消失点の方から近づいてくる"),
         Param("speed", u"速さ", 0.8, minimum=0.0, step=0.1, tooltip=u"1 フレームに進む距離"),
@@ -128,7 +157,7 @@ class TunnelLinesTool(BaseTool):
                u"カメラを選んで押してください (未選択ならシーンのカメラ)。\n"
                u"消失点のロケータ (_vanish) を X / Y に動かすと、消失点が画面の中で動きます。\n"
                u"「回転の速さ」を 0 以外にすると、トンネルが回って線が弧を描いて飛んできます。\n"
-               u"線のほかに、星・ハート・菱形も流せます。")
+               u"線のほかに、星・ハート・菱形も流せます。「残像」で、コピーを並べたり尾を引いたりできます。")
     params = _params()
 
     def run(self, ctx, **v):
@@ -143,7 +172,7 @@ class TunnelLinesUpdateTool(BaseTool):
     category = u"スピードライン"
     order = 637
     tooltip = (u"選択したスピードライン (トンネル) を、ルートのアトリビュートの値で作り直します。\n"
-               u"「(更新)」の付いた項目 (形・数) を変えた時に使います。消失点のロケータはそのまま。")
+               u"「(更新)」の付いた項目 (形・数・残像・残像の数) を変えた時に使います。消失点のロケータはそのまま。")
 
     def run(self, ctx, **v):
         from maya import cmds
@@ -171,19 +200,26 @@ def _create_vanish(cmds, mu, root, v, camera=None, target=None):
     return loc
 
 
-def _item_body(r, line):
-    """線・形 $i の $p / $X $Y $Z / $S / $vis (トンネルの空間。motion.tunnel_item と同じ)。"""
-    code = u"""float $nr = {r}.dfx_near;
+def _item_body(r, line, ghost=0):
+    """線・形 $i の $p / $X $Y $Z / $S / $vis (トンネルの空間。motion.tunnel_item と同じ)。
+
+    ghost: 残像の段 (motion.tunnel_ghost と同じ。残像の間隔 × 段 フレーム前の物を小さくする)。
+    """
+    if ghost:
+        code = u"float $f = frame - {k} * {r}.dfx_ghost_step;\n".format(r=r, k=ghost)
+    else:
+        code = u"float $f = frame;\n"
+    code += u"""float $nr = {r}.dfx_near;
 float $fr = max({r}.dfx_fade_end, $nr + 0.01);
 float $span = $fr - $nr;
 float $spd = {r}.dfx_speed * (1 - {r}.dfx_speed_random * {h78});
-float $n = $spd * frame / $span + {h71};
+float $n = $spd * $f / $span + {h71};
 float $c = floor($n);
 float $q = $n - $c;
 int $away = ({r}.dfx_direction == 0);
 float $depth = $fr - $q * $span;
 if ($away) $depth = $nr + $q * $span;
-float $th = 6.2831853 * {h72} + deg_to_rad({r}.dfx_roll + {r}.dfx_roll_speed * frame);
+float $th = 6.2831853 * {h72} + deg_to_rad({r}.dfx_roll + {r}.dfx_roll_speed * $f);
 float $rr = {r}.dfx_radius * (1 + ({h73} - 0.5) * 2 * {r}.dfx_radius_random);
 float $fade = clamp(0, 1, ($fr - $depth) / max($fr - {r}.dfx_fade_start, 1e-3))
             * clamp(0, 1, ($depth - $nr) / max({r}.dfx_near_fade, 1e-3));
@@ -215,17 +251,19 @@ vector $S = <<$tk * $fade, $ch * $fade, 1>>;
         code += u"""vector $Z = $Zi;
 vector $Y0 = <<0, 0, -1>>;
 vector $X0 = cross($Y0, $Z);
-float $a = deg_to_rad({r}.dfx_spin * frame + 360.0 * {h75} * {r}.dfx_spin_random);
+float $a = deg_to_rad({r}.dfx_spin * $f + 360.0 * {h75} * {r}.dfx_spin_random);
 vector $X = $X0 * cos($a) + $Y0 * sin($a);
 vector $Y = $Y0 * cos($a) - $X0 * sin($a);
 float $sz = {r}.dfx_size * (1 + ({h74} - 0.5) * 2 * {r}.dfx_size_random) * $fade;
 vector $S = <<$sz, $sz, $sz>>;
 """.format(r=r, h74=H("$i", "$c", 74), h75=H("$i", "$c", 75))
+    if ghost:
+        code += u"$S = $S * (1 - {r}.dfx_ghost_shrink * {k} / ({r}.dfx_ghost_count + 1.0));\n".format(r=r, k=ghost)
     return code
 
 
-def _width_expression(r, shape):
-    """線の元メッシュの頂点に太さを付ける (motion.tunnel_width_at と同じ式。左右の目印 X = ±1 からずらす)。"""
+def _width_expression(r, shapes):
+    """線の元メッシュ (shapes) の頂点に太さを付ける (motion.tunnel_width_at と同じ式。左右の目印 X = ±1 からずらす)。"""
     n = WIDTH_SAMPLES
     out = [u"float $ws = {r}.dfx_width_start;".format(r=r),
            u"float $wm = {r}.dfx_width_mid;".format(r=r),
@@ -235,8 +273,20 @@ def _width_expression(r, shape):
         out.append(u"$t = %r;" % (j / float(n - 1)))
         out.append(u"$w = max(0, $ws * 2 * ($t - 0.5) * ($t - 1) - $wm * 4 * $t * ($t - 1)"
                    u" + $we * 2 * $t * ($t - 0.5));")
-        out.append(u"%s.pnts[%d].pntx = 1 - $w;" % (shape, j))
-        out.append(u"%s.pnts[%d].pntx = $w - 1;" % (shape, n + j))
+        for shape in shapes:
+            out.append(u"%s.pnts[%d].pntx = 1 - $w;" % (shape, j))
+            out.append(u"%s.pnts[%d].pntx = $w - 1;" % (shape, n + j))
+    return u"\n".join(out) + u"\n"
+
+
+def _ghost_opacity_expression(r, shaders):
+    """残像の段ごとの不透明度 (motion.tunnel_ghost_opacity と同じ式)。"""
+    out = [u"float $op;"]
+    for k, shader in enumerate(shaders, 1):
+        out.append(u"$op = {r}.dfx_opacity * (1 - {r}.dfx_ghost_fade * {k} / ({r}.dfx_ghost_count + 1.0));"
+                   .format(r=r, k=k))
+        out.append(u"{s}.outTransparencyR = 1 - $op; {s}.outTransparencyG = 1 - $op; "
+                   u"{s}.outTransparencyB = 1 - $op;".format(s=shader))
     return u"\n".join(out) + u"\n"
 
 
@@ -255,27 +305,46 @@ def build(cmds, mu, root, v):
                              worldUpObject=follow, worldUpVector=(0, 1, 0), name=prefix + "_aimVanish")[0]
     owned += [tunnel, cmds.ls(aim, long=True)[0]]
     line = v["shape"] == SHAPE_LINE
-    pts, faces = shape_points(v["shape"])
-    src_grp = cmds.ls(cmds.group(empty=True, name=prefix + "_src", parent=root), long=True)[0]
+    src_grp =cmds.ls(cmds.group(empty=True, name=prefix + "_src", parent=root), long=True)[0]
     owned.append(src_grp)
-    src = wx.make_mesh(cmds, prefix + "_itemSrc", src_grp, pts, faces)
     cmds.setAttr(src_grp + ".visibility", 0)
     _, sg = wx.flat_shader(cmds, mu, root, prefix + "_mat", owned, color_attr="color", opacity_attr="opacity")
-    cmds.sets(src, edit=True, forceElement=sg)
-    if line:
-        src_shape = wx.short(cmds.listRelatives(src, shapes=True, fullPath=True)[0])
-        owned.append(cmds.expression(name=prefix + "_lineWidth", alwaysEvaluate=True, unitConversion="all",
-                                     string=_width_expression(prefix, src_shape)))
     count = int(v["count"])
-    grp = cmds.ls(cmds.group(empty=True, name=prefix + "_items", parent=tunnel), long=True)[0]
-    owned.append(grp)
-    nodes = [cmds.instance(src, name="%s_item_%03d" % (prefix, k + 1))[0] for k in range(count)]
-    cmds.parent(nodes, grp, relative=True)
-    nodes = cmds.listRelatives(grp, children=True, fullPath=True) or []
     head = u"float $sd = %s.dfx_seed;\n" % prefix
-    body = _item_body(prefix, line)
-    wx.chunked_expressions(cmds, root, prefix + "_item", nodes, wx.TRANSFORM_OUTPUTS, head,
-                           lambda a, b: body + wx.mel_store_transform(a), owned)
+    line_shapes = []     # 太さを付ける線の元メッシュ
+
+    def make_group(name, item_name, src_name, is_line, shading_group, body):
+        src_pts, src_faces = shape_points(SHAPE_LINE if is_line else v["shape"])
+        src = wx.make_mesh(cmds, prefix + src_name, src_grp, src_pts, src_faces)
+        cmds.sets(src, edit=True, forceElement=shading_group)
+        if is_line:
+            line_shapes.append(wx.short(cmds.listRelatives(src, shapes=True, fullPath=True)[0]))
+        grp = cmds.ls(cmds.group(empty=True, name=prefix + name, parent=tunnel), long=True)[0]
+        owned.append(grp)
+        nodes = [cmds.instance(src, name="%s%s_%03d" % (prefix, item_name, k + 1))[0] for k in range(count)]
+        cmds.parent(nodes, grp, relative=True)
+        nodes = cmds.listRelatives(grp, children=True, fullPath=True) or []
+        wx.chunked_expressions(cmds, root, prefix + item_name, nodes, wx.TRANSFORM_OUTPUTS, head,
+                               lambda a, b: body + wx.mel_store_transform(a), owned)
+
+    make_group("_items", "_item", "_itemSrc", line, sg, _item_body(prefix, line))
+    # 残像: 少し前の線・形のコピー (後ろほど薄く・小さく。段ごとにマテリアルを分ける)
+    ghost_shaders = []
+    for k in range(1, ghost_levels(v) + 1):
+        shader, gsg = wx.flat_shader(cmds, mu, root, "%s_ghostMat%02d" % (prefix, k), owned,
+                                     color_attr="color", opacity_attr=None)
+        ghost_shaders.append(wx.short(shader))
+        make_group("_ghost%02d" % k, "_ghost%02d" % k, "_ghostSrc%02d" % k, line, gsg,
+                   _item_body(prefix, line, ghost=k))
+    if ghost_shaders:
+        owned.append(cmds.expression(name=prefix + "_ghostOpacity", alwaysEvaluate=True, unitConversion="all",
+                                     string=_ghost_opacity_expression(prefix, ghost_shaders)))
+    # 尾: 形の後ろに引く線 (線と同じ長さ・太さの設定)
+    if has_tail(v):
+        make_group("_tails", "_tail", "_tailSrc", True, sg, _item_body(prefix, True))
+    if line_shapes:
+        owned.append(cmds.expression(name=prefix + "_lineWidth", alwaysEvaluate=True, unitConversion="all",
+                                     string=_width_expression(prefix, line_shapes)))
     wx.finish(cmds, mu, root, owned)
 
 

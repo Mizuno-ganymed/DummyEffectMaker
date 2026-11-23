@@ -920,3 +920,20 @@ def tunnel_item(i, frame, v, line):
     y = sub(mul(y0, math.cos(a)), mul(x0, math.sin(a)))
     sz = v["size"] * (1 + (h(i, c, 74, sd) - 0.5) * 2 * v["size_random"]) * fade
     return p, (x, y, inward), (sz, sz, sz)
+
+
+def tunnel_ghost_scale(k, v):
+    """k 番目の残像 (1 = すぐ後ろ) の大きさの倍率。"""
+    return 1.0 - v["ghost_shrink"] * k / (int(v["ghost_count"]) + 1.0)
+
+
+def tunnel_ghost_opacity(k, v):
+    """k 番目の残像の不透明度 (後ろほど薄い)。"""
+    return v["opacity"] * (1.0 - v["ghost_fade"] * k / (int(v["ghost_count"]) + 1.0))
+
+
+def tunnel_ghost(i, frame, k, v, line):
+    """線・形 i の k 番目の残像: 残像の間隔 × k フレーム前の線・形を、小さくしたもの。"""
+    p, axes, s = tunnel_item(i, frame - k * v["ghost_step"], v, line)
+    m = tunnel_ghost_scale(k, v)
+    return p, axes, (s[0] * m, s[1] * m, s[2] * m)
