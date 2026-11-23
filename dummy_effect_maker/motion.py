@@ -636,18 +636,19 @@ def _strand_rows(pts, widths, cp, cdir, style=None):
     return out
 
 
-def lightning_rows(style, frame, v, top, ground, cp, cdir, segments, branches, branch_segments):
+def lightning_rows(style, frame, v, top, ground, cp, cdir, segments, branches, branch_segments, strike=False):
     """全部の点の行 [(位置, (X, Y, Z), 太さ)] (本筋 → 枝の順) と濃さ。光っていなければ太さ 0。"""
     sd = v["seed"]
     n, m = int(segments), int(branch_segments)
-    strike = lightning_strike(frame, v)
+    if strike is False:
+        strike = lightning_strike(frame, v)
     count = strand_rows(style, n) + int(branches) * strand_rows(style, m)
     if strike is None:
         return [(top, IDENTITY, 0.0)] * count, 0.0
     c, ts = strike
     t0, g0 = lightning_ends(c, v, top, ground)
     length, d, a, b = lightning_frame(t0, g0)
-    prog = clamp(0, 1, (frame - ts) / max(v["grow_frames"], 0.01))
+    prog = 1.0 if v["grow_frames"] <= 0 else clamp(0, 1, (frame - ts) / v["grow_frames"])   # 0 なら一瞬で伸び切る
     pts, widths = [], []
     last = min(n - 1, int(math.floor((prog + 1e-9) * max(n - 1, 1))))   # 伸びた所までの点
     for k in range(n):
@@ -689,3 +690,44 @@ def lightning_alpha(frame, v, c, ts):
 
 
 IDENTITY = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+
+
+
+# ---------------------------------------------------------------- 放電 (2 つのロケータの間に流れ続ける稲妻)
+def discharge_strike(frame, v):
+    """放電の今の回 (c, 始まり)。開始〜終わりのフレームの間、「形が変わる間隔」ごとに形が変わる。"""
+    if frame < v["start_frame"] or frame > v["end_frame"]:
+        return None
+    chg = max(v["change_frames"], 0.5)
+    c = int(math.floor((frame - v["start_frame"]) / chg))
+    return c, v["start_frame"] + c * chg
+
+
+def discharge_values(v):
+    """放電を稲妻の計算に渡す値 (伸びは一瞬・1 回の長さ = 形が変わる間隔)。"""
+    return dict(v, grow_frames=0.0, duration=max(v["change_frames"], 0.5))
+
+
+def discharge_rows(style, frame, v, start, end, cp, cdir, segments, branches, branch_segments):
+    """放電の帯の行と濃さ (lightning_rows と同じ形)。start = 発生、end = 終端 (Y が上)。"""
+    return lightning_rows(style, frame, discharge_values(v), start, end, cp, cdir, segments, branches,
+                          branch_segments, strike=discharge_strike(frame, v))
+
+
+def discharge_samples(v):
+    """当たりを調べるフレーム (開始〜終わりを「爆発の間隔」ごと)。"""
+    step = max(v["burst_interval"], 0.5)
+    out = []
+    t = v["start_frame"]
+    while t <= v["end_frame"] + 1e-6:
+        out.append(t)
+        t += step
+    return out
+
+
+def discharge_probe(start, end, reach):
+    """当たりを調べる線分 (発生と終端の真ん中から、終端の少し先 (reach) まで)。"""
+    d = sub(end, start)
+    n = mag(d)
+    u = unit(d) if n > 1e-9 else (0.0, -1.0, 0.0)
+    return add(start, mul(d, 0.5)), add(end, mul(u, reach))

@@ -18,7 +18,7 @@ from mathutils.bvhtree import BVHTree
 
 from ... import motion as mo
 from ...core import BaseTool, ToolError
-from ...tools import explosion as mx
+from ...tools import explosion as mx, explosion_single as ms
 from .. import runtime as rt
 from . import _build as bd, _bullets as _bl, _wx as wx
 
@@ -143,6 +143,33 @@ def _first_hit(meshes, matrices, t0, p0, t1, p1):
     return best
 
 
+def probe_hits(collider_objs, probes):
+    """線分 [(フレーム, 始まり, 終わり)] (Blender のワールド) ごとに、コリジョンに当たった所 (放電の爆発)。"""
+    from mathutils import Vector
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    meshes = []
+    for node in collider_objs:
+        for obj in collider_meshes(node):
+            meshes.append((node, obj, BVHTree.FromObject(obj, depsgraph)))
+    cache = {}
+
+    def matrices(obj, t):
+        key = (obj.name, t)
+        if key not in cache:
+            m = rt.matrix_world_at(obj, t)
+            cache[key] = (m, m.inverted_safe())
+        return cache[key]
+
+    hits = []
+    for t, a, b in probes:
+        hit = _first_hit(meshes, matrices, t, Vector(a), t, Vector(b))
+        if hit:
+            hit["frame"] = t
+            hit["index"] = len(hits)
+            hits.append(hit)
+    return hits
+
+
 def store_hits(root, hits):
     flat = []
     for h in hits:
@@ -256,7 +283,11 @@ def build(root, v):
     scene = bpy.context.scene
     hits = find_hits(sampler, count, colliders(), scene.frame_start, scene.frame_end, int(v["substeps"]))
     store_hits(root, hits)
-    n = len(hits)
+    build_parts(root, v, len(hits))
+
+
+def build_parts(root, v, n):
+    """当たり n 個分の部品 (閃光・輪・火の玉・煙・火花) を作る (爆発 (単体) も使う)。"""
     if n == 0:
         return
     for part, template, per, mat in (
@@ -281,8 +312,11 @@ def yup_hits(root):
 
 
 def update(root, frame):
-    v = rt.read_params(root, mx.stored_params())
-    hits = yup_hits(root)
+    update_parts(root, rt.read_params(root, mx.stored_params()), yup_hits(root), frame)
+
+
+def update_parts(root, v, hits, frame):
+    """部品を置く。hits: [{frame, pos, normal}] (Y が上の空間)。爆発 (単体) も使う。"""
     objs = dict((p, wx.part(root, "_" + p)) for p in PARTS)
     for part, color in (("flashes", "flash_color"), ("rings", "ring_color"), ("sparks", "spark_color")):
         if objs[part] is not None:
@@ -336,3 +370,44 @@ def _on_hide_change(root, frame):
 
 
 bd.register_builder(mx.EFFECT_TYPE, mx.stored_params, mx.LIVE_PARAMS, build, _on_hide_change)
+
+
+# ---------------------------------------------------------------- 爆発 (単体)
+class ExplosionSingleTool(BaseTool):
+    locals().update(_tool(ms.ExplosionSingleTool, 905))
+    tooltip = (u"コリジョンも弾も無しで、爆心の Empty の所で起きる爆発を作ります (閃光・衝撃波の輪・火の玉・煙・火花)。\n"
+               u"オブジェクトを選んでいればその位置に置きます。Empty の上 (ローカル Z) の向きに広がります。\n"
+               u"起きるフレームは「開始フレーム」。数を変えたら「エフェクトを更新」を押します。")
+
+    def run(self, ctx, **v):
+        kind = ms.KIND
+        root, cam, target = wx.create_root(bpy.context, ctx, kind.effect_type, "dfx_burst", kind.stored_params(),
+                                           kind.live, v, need_camera=True, need_wind=False)
+        center = rt.add_control(root, "center", (0.0, 0.0, 0.0), display="ARROWS", size=max(v["size"] * 0.5, 0.2))
+        if target is not None:
+            center.location = target.matrix_world.translation
+            ctx.log(u"  爆心を %s の位置に置きました" % target.name)
+        build_single(root, v)
+        rt.update_root(root)
+        wx.select_only(root)
+        return root.name
+
+
+def build_single(root, v):
+    build_parts(root, v, 1)
+
+
+def single_hit(root, v):
+    """爆心の当たり (Y が上: 位置と上 (ローカル Z → Y) の向き)。"""
+    m = wx.yup(rt.control(root, "center").matrix_world)
+    return ms.hit_of(v, (m[12], m[13], m[14]), mo.unit((m[4], m[5], m[6])))
+
+
+def update_single(root, frame):
+    if rt.control(root, "center") is None:
+        return
+    v = rt.read_params(root, ms.KIND.stored_params())
+    update_parts(root, v, [single_hit(root, v)], frame)
+
+
+bd.register_builder(ms.EFFECT_TYPE, ms.KIND.stored_params, ms.KIND.live, build_single, update_single)

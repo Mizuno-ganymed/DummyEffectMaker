@@ -85,18 +85,27 @@ def build(root, v):
         obj.data["dfx_strands"] = [n, nb, m]
 
 
+KINDS = dict((k.effect_type, k) for k in (ml.REAL, ml.ANIME, ml.DISCHARGE_REAL, ml.DISCHARGE_ANIME))
+ENDS = {False: ("top", "ground"), True: ("start", "end")}   # 稲妻 / 放電 のコントロールの名前
+
+
 def update(root, frame):
-    kind = ml.REAL if root.get(rt.TYPE_KEY) == ml.REAL.effect_type else ml.ANIME
+    effect_type = root.get(rt.TYPE_KEY)
+    kind = KINDS[effect_type]
+    discharge = effect_type in ml.DISCHARGE_TYPES
     v = rt.read_params(root, kind.stored_params())
-    top, gnd = rt.control(root, "top"), rt.control(root, "ground")
+    top, gnd = [rt.control(root, r) for r in ENDS[discharge]]
     bolt, glow = wx.part(root, "_bolt"), wx.part(root, "_glow")
     if top is None or gnd is None or bolt is None:
         return
     n, nb, m = list(bolt.data["dfx_strands"])
     cp, cdir = wx.camera_yup(root)
-    rows, alpha = mo.lightning_rows(ml.STYLES[kind.effect_type], frame, v,
-                                    mo.yup_vector(tuple(top.matrix_world.translation)),
-                                    mo.yup_vector(tuple(gnd.matrix_world.translation)), cp, cdir, n, nb, m)
+    fn = mo.discharge_rows if discharge else mo.lightning_rows
+    rows, alpha = fn(ml.STYLES[effect_type], frame, v, mo.yup_vector(tuple(top.matrix_world.translation)),
+                     mo.yup_vector(tuple(gnd.matrix_world.translation)), cp, cdir, n, nb, m)
+    if discharge:
+        from . import explosion as bex
+        bex.update_parts(root, v, bex.yup_hits(root), frame)
     placements = [(p, axes, (w,) * 3) if w > 1e-9 else wx.hidden(p) for p, axes, w in rows]
     rt.set_material(wx.material_of(bolt), v["color"], alpha)
     wx.write_particles(bolt, placements)
@@ -107,3 +116,70 @@ def update(root, frame):
 
 for _kind in (ml.REAL, ml.ANIME):
     bd.register_builder(_kind.effect_type, _kind.stored_params, _kind.live, build, update)
+
+
+# ---------------------------------------------------------------- 放電
+def _discharge_tool(maya_tool):
+    d = _tool(maya_tool)
+    d["tooltip"] = (maya_tool.tooltip.replace(u"ロケータ", u"Empty").replace(u"「天候を更新」", u"「エフェクトを更新」"))
+    return d
+
+
+class DischargeRealTool(BaseTool):
+    locals().update(_discharge_tool(ml.DischargeRealTool))
+
+    def run(self, ctx, **v):
+        return create_discharge(ctx, ml.DISCHARGE_REAL, v)
+
+
+class DischargeAnimeTool(BaseTool):
+    locals().update(_discharge_tool(ml.DischargeAnimeTool))
+
+    def run(self, ctx, **v):
+        return create_discharge(ctx, ml.DISCHARGE_ANIME, v)
+
+
+def create_discharge(ctx, kind, v):
+    from . import explosion as bex
+    root, cam, target = wx.create_root(bpy.context, ctx, kind.effect_type, kind.root_name.replace("#", ""),
+                                       kind.stored_params(), kind.live, v, need_camera=True, need_wind=False)
+    base = target.matrix_world.translation.copy() if target is not None else None
+    for role, pos, display in (("start", (0.0, 0.0, 8.0), "CONE"), ("end", (6.0, 0.0, 0.0), "SPHERE")):
+        c = rt.add_control(root, role, pos, display=display, size=0.4)
+        if base is not None:
+            off = (-6.0, 0.0, 8.0) if role == "start" else (0.0, 0.0, 0.0)
+            c.location = (base.x + off[0], base.y + off[1], base.z + off[2])
+    build_discharge(root, v)
+    rt.update_root(root)
+    wx.select_only(root)
+    hits = list(root.get("dfxHits", []))
+    if not bex.colliders():
+        ctx.log(u"  コリジョンが無いので爆発はしません (ぶつける相手を「コリジョンに指定」して「エフェクトを更新」)")
+    else:
+        ctx.log(u"  終端の側がコリジョンに %d 回当たります" % (len(hits) // 8))
+    return root.name
+
+
+def discharge_probes(root, v):
+    """当たりを調べる線分 [(フレーム, 始まり, 終わり)] (Blender のワールド。motion.discharge_probe と同じ)。"""
+    start, end = rt.control(root, "start"), rt.control(root, "end")
+    out = []
+    for t in mo.discharge_samples(v):
+        a = tuple(rt.matrix_world_at(start, t).translation)
+        b = tuple(rt.matrix_world_at(end, t).translation)
+        p0, p1 = mo.discharge_probe(a, b, v["reach"])
+        out.append((t, p0, p1))
+    return out
+
+
+def build_discharge(root, v):
+    from . import explosion as bex
+    build(root, v)
+    cols = bex.colliders()
+    hits = bex.probe_hits(cols, discharge_probes(root, v)) if cols else []
+    bex.store_hits(root, hits)
+    bex.build_parts(root, v, len(hits))
+
+
+for _kind in (ml.DISCHARGE_REAL, ml.DISCHARGE_ANIME):
+    bd.register_builder(_kind.effect_type, _kind.stored_params, _kind.live, build_discharge, update)

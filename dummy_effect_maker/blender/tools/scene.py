@@ -178,7 +178,7 @@ def build_shot(scene, roots, start, end):
         if cam is not None and cam.type == "CAMERA" and cam not in cameras:
             cameras.append(cam)
         data = {}
-        if effect_type == _bullets.EXPLOSION_TYPE:
+        if effect_type == _bullets.EXPLOSION_TYPE or effect_type.startswith("discharge_"):
             data["hits"] = [{"frame": h["frame"], "bullet": h["index"], "position": point(h["pos"]),
                              "normal": xc.convert_vector(h["normal"], "z")} for h in _bullets.read_hits(root)]
         elif effect_type == "wind" and "dfxWindX" in root:

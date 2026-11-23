@@ -10,7 +10,7 @@ UPDATE_TOOLS = {
     "homing": "HomingUpdateTool", "vulcan": "VulcanUpdateTool", "energy_ball": "EnergyBallUpdateTool",
     "focus_lines": "FocusLinesUpdateTool", "speed_lines": "SpeedLinesUpdateTool",
     "camera_shake": "CameraShakeUpdateTool", "hand_shake": "HandShakeUpdateTool",
-    "shockwave": "ShockwaveUpdateTool", "explosion": "ExplosionUpdateTool", "nuke": "NukeUpdateTool",
+    "shockwave": "ShockwaveUpdateTool", "explosion": "ExplosionUpdateTool", "explosion_single": "ExplosionUpdateTool", "nuke": "NukeUpdateTool",
     "wind": "WindUpdateTool",
 }
 GHOST_UPDATE = "GhostBlurUpdateTool"

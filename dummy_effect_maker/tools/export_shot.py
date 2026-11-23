@@ -195,7 +195,7 @@ def export_data(cmds, mu, space, root, effect_type, frames):
     data = {}
     if effect_type in explosion.BULLET_TYPES:
         data["bullets"] = [_bullet(cmds, space, b, frames) for b in explosion.bullets_of(cmds, root)]
-    elif effect_type == explosion.EFFECT_TYPE:
+    elif effect_type == explosion.EFFECT_TYPE or effect_type.startswith("discharge_"):
         hits = explosion.read_hits(cmds, root) if cmds.attributeQuery(
             explosion.HITS_ATTR, node=root, exists=True) else []
         data["hits"] = [{"frame": h["frame"], "bullet": h["index"], "position": space.point(h["pos"]),

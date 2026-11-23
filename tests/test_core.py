@@ -144,14 +144,14 @@ def test_tools_are_grouped_into_tabs():
     assert [tab for tab, _ in tabs] == [u"ツール", u"カメラ", u"エネルギー弾", u"衝撃波", u"お化けブラー",
                                         u"天候", u"爆発"]
     assert dict(tabs)[u"爆発"] == [
-        u"コリジョンに指定", u"コリジョンを解除", u"爆発", u"爆発を更新", u"爆発を外す",
+        u"コリジョンに指定", u"コリジョンを解除", u"爆発", u"爆発 (単体)", u"爆発を更新", u"爆発を外す",
         u"爆発のパラメータを保存", u"爆発のパラメータを読み込み",
         u"核爆発", u"核爆発を更新", u"核爆発のパラメータを保存", u"核爆発のパラメータを読み込み"]
     assert dict(tabs)[u"天候"] == [
         u"風", u"風を更新", u"雨 (線と跳ね)", u"雨 (遠景の筒)", u"雪 (粒)", u"雪 (遠景の筒)",
         u"土煙 (スプライト)", u"土煙 (もこもこ)", u"火花 (線)", u"火花 (尾を引く)",
         u"霧 (霧の板)", u"霧 (遠景の重ね板)", u"地霧 (重ね板)", u"地霧 (這う霧)",
-        u"稲妻 (実写)", u"稲妻 (アニメ)", u"天候を更新", u"天候のパラメータを保存", u"天候のパラメータを読み込み"]
+        u"稲妻 (実写)", u"稲妻 (アニメ)", u"放電 (実写)", u"放電 (アニメ)", u"天候を更新", u"天候のパラメータを保存", u"天候のパラメータを読み込み"]
     weather_tools = [t for t in tools if t.tab == u"天候"]
     assert [c for c, _ in registry.group_by_category(weather_tools)] == [
         u"風", u"雨", u"雪", u"土煙", u"火花", u"霧", u"地霧", u"稲妻", u"調整"]
@@ -811,7 +811,7 @@ def test_ghost_blur_smear_points():
 
 
 def test_weather_params_are_live_rebuild_or_create():
-    assert len(wx.KINDS) == 16   # 天候 15 (稲妻 2 つを含む) + 核爆発 (同じ仕組み)
+    assert len(wx.KINDS) == 19   # 天候 17 (稲妻・放電 各 2 つを含む) + 核爆発・爆発 (単体) (同じ仕組み)
     for kind in wx.KINDS.values():
         names = set(p.name for p in kind.tool.params)
         stored = set(kind.live) | set(kind.rebuild)
@@ -1139,3 +1139,40 @@ def test_lightning_strikes_and_shapes():
     _, d, a, _ = mo.lightning_frame(top, gnd)
     side = [mo.dot(mo.sub(rows[k * mo.ANIME_SUB][0], mo.add(top, mo.mul(mo.sub(gnd, top), k / 11.0))), a) for k in range(1, 11)]
     assert all(x * y < 0 for x, y in zip(side[:-1], side[1:]))
+
+
+def test_explosion_single_params_and_hit():
+    from dummy_effect_maker.tools import explosion, explosion_single as es
+    names = [p.name for p in es.ExplosionSingleTool.params]
+    # 爆発と同じ見た目の項目 + 開始フレーム。弾・当たり判定の項目は無い
+    assert names[0] == "start_frame" and "hide_bullet" not in names and "substeps" not in names
+    assert set(names) - set(["start_frame"]) <= set(p.name for p in explosion.ExplosionTool.params)
+    assert set(es.KIND.rebuild) == set(("fire_count", "smoke_count", "spark_count"))
+    assert not es.KIND.need_wind and es.KIND.need_camera
+    v = es.ExplosionSingleTool.default_values()
+    v.update(start_frame=12.0)
+    hit = es.hit_of(v, (1, 2, 3), (0, 1, 0))
+    assert hit == {"frame": 12.0, "pos": (1, 2, 3), "normal": (0, 1, 0)}
+
+
+def test_discharge_flows_between_two_points():
+    from dummy_effect_maker import motion as mo
+    from dummy_effect_maker.tools import lightning as lt
+    v = lt.DischargeAnimeTool.default_values()
+    v.update(start_frame=5.0, end_frame=20.0, change_frames=2.0, spread=0.0, flicker=0.0)
+    # 開始〜終わりの間ずっと流れ、形の変わる回は 2 フレームごと
+    assert mo.discharge_strike(4, v) is None and mo.discharge_strike(21, v) is None
+    assert mo.discharge_strike(5, v) == (0, 5.0) and mo.discharge_strike(8.5, v) == (1, 7.0)
+    a, b = (0.0, 8.0, 0.0), (6.0, 0.0, 0.0)
+    n, nb, m = int(v["segments"]), int(v["branches"]), int(v["branch_segments"])
+    rows, alpha = mo.discharge_rows(mo.STYLE_ANIME, 5, v, a, b, (0, 4, 30), (0, 0, -1), n, nb, m)
+    rn = mo.strand_rows(mo.STYLE_ANIME, n)
+    # 最初のフレームから発生と終端がつながる (伸びるのを待たない)
+    assert alpha > 0 and _close(rows[0][0][1], 8.0) and all(abs(x - y) < 1e-9 for x, y in zip(rows[rn - 1][0], b))
+    assert all(w > 0 for _, _, w in rows[:rn - 1])
+    # 当たりを調べるフレームと線分 (真ん中から、終端の少し先まで)
+    assert mo.discharge_samples(dict(v, burst_interval=4.0)) == [5.0, 9.0, 13.0, 17.0]
+    p0, p1 = mo.discharge_probe(a, b, 1.0)
+    assert _close(p0[0], 3.0) and _close(p0[1], 4.0) and _close(p1[0], 6.6) and _close(p1[1], -0.8)
+    names = [p.name for p in lt.DischargeAnimeTool.params]
+    assert "count" not in names and "end_frame" in names and "flash_size" in names and "sides" in names

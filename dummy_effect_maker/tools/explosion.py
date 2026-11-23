@@ -187,13 +187,21 @@ class ExplosionUpdateTool(BaseTool):
     tab = TAB
     category = u"爆発"
     order = 906
-    tooltip = (u"選択した爆発 (または弾) の当たりを計算し直して作り直します。\n"
+    tooltip = (u"選択した爆発 (または弾) の当たりを計算し直して作り直します (爆発 (単体) も作り直します)。\n"
                u"弾・コリジョンを動かした時や、「(更新)」の付いた項目 (数など) を変えた時に使います。")
 
     def run(self, ctx, **v):
         from maya import cmds
         from . import _maya_utils as mu
-        return rebuild_effects(cmds, mu, ctx, selected_roots(cmds, mu, u"更新する"))
+        from . import explosion_single
+        singles = explosion_single.selected(cmds, mu)   # 爆発 (単体) も作り直す
+        others = [r for r in mu.selected_effect_roots()
+                  if r not in singles and cmds.getAttr(r + "." + mu.EFFECT_TYPE_ATTR) in (EFFECT_TYPE,) + BULLET_TYPES]
+        result = wx.rebuild_effects(cmds, mu, ctx, singles) if singles else []
+        if others or not singles:
+            result += rebuild_effects(cmds, mu, ctx, selected_roots(cmds, mu, u"更新する"))
+        cmds.select(result)
+        return result
 
 
 class ExplosionRemoveTool(BaseTool):
@@ -396,6 +404,45 @@ def _first_hit(om, meshes, matrices, t0, p0, t1, p1):
     return best
 
 
+def collider_shapes(cmds, om, collider_nodes):
+    """コリジョンのメッシュ [(ノード, transform, MFnMesh, 加速)]。"""
+    meshes = []
+    for node in collider_nodes:
+        for shape in collider_meshes(cmds, node):
+            sel = om.MSelectionList()
+            sel.add(shape)
+            fn = om.MFnMesh(sel.getDagPath(0))
+            xform = cmds.listRelatives(shape, parent=True, fullPath=True)[0]
+            meshes.append((node, xform, fn, fn.autoUniformGridParams()))
+    return meshes
+
+
+def probe_hits(cmds, collider_nodes, probes):
+    """線分 [(フレーム, 始まり, 終わり)] ごとに、コリジョンに当たった所 (放電の爆発)。
+
+    その時刻のコリジョンの形・位置で調べる。当たらない線分は飛ばす。
+    """
+    from maya.api import OpenMaya as om
+    meshes = collider_shapes(cmds, om, collider_nodes)
+    cache = {}
+
+    def matrices(xform, t):
+        key = (xform, t)
+        if key not in cache:
+            m = om.MMatrix(cmds.getAttr(xform + ".worldMatrix[0]", time=t))
+            cache[key] = (m, m.inverse())
+        return cache[key]
+
+    hits = []
+    for t, a, b in probes:
+        hit = _first_hit(om, meshes, matrices, t, a, t, b)
+        if hit:
+            hit["frame"] = t
+            hit["index"] = len(hits)
+            hits.append(hit)
+    return hits
+
+
 def store_hits(cmds, root, hits):
     flat = []
     for h in hits:
@@ -468,7 +515,6 @@ def release(cmds, mu, root):
 
 def build_effect(cmds, mu, root, v):
     """当たりを計算し、爆発の部品とエクスプレッションを作る。当たりの一覧を返す。"""
-    from . import weather
     source = wx.find_link(cmds, root, SOURCE_ATTR)
     bullets = bullets_of(cmds, source)
     start = cmds.playbackOptions(query=True, minTime=True)
@@ -479,6 +525,25 @@ def build_effect(cmds, mu, root, v):
     prefix = wx.short(root)
     owned = []
     wx.track_links(cmds, mu, root, owned)
+    build_parts(cmds, mu, root, v, hits, owned)
+
+    # 当たった弾を、当たったフレームから隠す
+    if hits:
+        lines = [u"{b}.lodVisibility = ({r}.dfx_hide_bullet == 0) || (frame < {f!r});\n".format(
+            b=wx.short(h["bullet"]), r=prefix, f=float(h["frame"])) for h in hits]
+        owned.append(cmds.expression(name=prefix + "_hideBullets", alwaysEvaluate=True,
+                                     string=u"".join(lines)))
+    wx.finish(cmds, mu, root, owned)
+    return hits
+
+
+def build_parts(cmds, mu, root, v, hits, owned):
+    """当たりごとの部品 (閃光・輪・火の玉・煙・火花) とエクスプレッション (放電の爆発も使う)。
+
+    カメラの decomposeMatrix (wx.track_links) は作ってある前提。
+    """
+    from . import weather
+    prefix = wx.short(root)
     src_grp = cmds.group(empty=True, name=prefix + "_src", parent=root)
     owned.append(src_grp)
     pts, faces = wx.disc_points(16, 0.5)
@@ -512,15 +577,6 @@ def build_effect(cmds, mu, root, v):
             continue
         nodes = wx.make_instances(cmds, root, src, "%s_%s" % (prefix, name), n * per, owned)
         _part_expressions(cmds, prefix, name, nodes, per, hits, head, body, owned)
-
-    # 当たった弾を、当たったフレームから隠す
-    if hits:
-        lines = [u"{b}.lodVisibility = ({r}.dfx_hide_bullet == 0) || (frame < {f!r});\n".format(
-            b=wx.short(h["bullet"]), r=prefix, f=float(h["frame"])) for h in hits]
-        owned.append(cmds.expression(name=prefix + "_hideBullets", alwaysEvaluate=True,
-                                     string=u"".join(lines)))
-    wx.finish(cmds, mu, root, owned)
-    return hits
 
 
 def _part_expressions(cmds, prefix, name, nodes, per, hits, head, body, owned):

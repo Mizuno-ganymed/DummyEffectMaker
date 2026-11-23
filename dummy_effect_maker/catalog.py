@@ -82,8 +82,9 @@ _WEATHER_GROUPS = {
     "wind": CONTROL, "rain": PARTICLES, "snow": PARTICLES, "dust": PARTICLES,
     "dust_mesh": PARTICLES, "sparks": PARTICLES, "spark_trail": PARTICLES,
     "rain_far": LAYERS, "snow_far": LAYERS, "fog": LAYERS, "fog_depth": LAYERS,
-    "ground_fog": LAYERS, "ground_crawl": LAYERS, "nuke": BURST,
+    "ground_fog": LAYERS, "ground_crawl": LAYERS, "nuke": BURST, "explosion_single": BURST,
     "lightning_real": PARTICLES, "lightning_anime": PARTICLES,
+    "discharge_real": PARTICLES, "discharge_anime": PARTICLES,
 }
 
 _CACHE = []
@@ -107,7 +108,7 @@ def specs():
     for kind in gb.KINDS.values():
         out.append(EffectSpec(kind.effect_type, kind.noun, MOTION, kind.stored_params(),
                               kind.live, kind.rebuild))
-    for module_name in ("wind", "weather", "weather_layers", "lightning", "nuke"):
+    for module_name in ("wind", "weather", "weather_layers", "lightning", "explosion_single", "nuke"):
         _tools(module_name)  # 種類を登録させる
     wx = _tools("_weather")
     for effect_type in sorted(wx.KINDS, key=lambda t: wx.KINDS[t].tool.order):

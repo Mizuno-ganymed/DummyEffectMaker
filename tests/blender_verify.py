@@ -946,6 +946,139 @@ def b14_lightning():
           _wx.part(root, "_bolt").data["dfx_count"] == 20 + 5 * 6 and near(rt.control(root, "top").location, (1, 4, 40)))
 
 
+# ---------------------------------------------------------------- 爆発 (単体)
+@section
+def b15_explosion_single():
+    from dummy_effect_maker.blender.tools import _wx, explosion as bex
+    from dummy_effect_maker.tools import explosion_single as ms
+    from dummy_effect_maker import motion as mo
+    new_scene()
+    cam = scene_camera()
+    spot = bpy.data.objects.new("spot", None)
+    bpy.context.scene.collection.objects.link(spot)
+    spot.location = (2, 3, 1)
+    select(spot, cam)
+    op(bex.ExplosionSingleTool, start_frame=4.0, fire_count=5, smoke_count=4, spark_count=6)
+    root = bpy.data.objects.get("dfx_burst1")
+    center = rt.control(root, "center")
+    check("爆発 (単体): コリジョン無しで作れる (爆心は選んだ物の位置・部品 5 つ)",
+          root is not None and not bex.colliders() and near(center.location, (2, 3, 1))
+          and all(_wx.part(root, "_" + p) for p in bex.PARTS) and root.get("dfx_camera") == cam)
+    center.rotation_euler = (math.radians(-90), 0, 0)   # 上 (ローカル Z) を手前 (-Y) に向ける
+    v = rt.read_params(root, ms.KIND.stored_params())
+    bad = []
+    for f in (3, 4, 5, 7, 10, 16, 30):
+        bpy.context.scene.frame_set(f)
+        hit = bex.single_hit(root, v)
+        cp, cdir = _wx.camera_yup(root)
+        p, sz, vis, roll = mo.explosion_flash(0, f, hit, v)
+        if not same_particle(_wx.part(root, "_flashes"), 0, (p, mo.billboard(p, cp, cdir, roll), (sz,) * 3) if vis and sz > 1e-9 else _wx.hidden(p)):
+            bad.append(("flash", f))
+        p, axes, sz, vis = mo.explosion_ring(0, f, hit, v)
+        if not same_particle(_wx.part(root, "_rings"), 0, (p, axes, (sz,) * 3) if vis and sz > 1e-9 else _wx.hidden(p)):
+            bad.append(("ring", f))
+        for part, fn, per in (("_fire", mo.explosion_fire, 5), ("_smoke", mo.explosion_smoke, 4)):
+            for j in range(per):
+                p, sz, vis, rot = fn(0, j, f, hit, v)
+                if not same_particle(_wx.part(root, part), j, (p, _wx.euler_axes(*rot), (sz,) * 3) if vis and sz > 1e-9 else _wx.hidden(p)):
+                    bad.append((part, f, j))
+        for j in range(6):
+            p, vel, scale, vis = mo.explosion_spark(0, j, f, hit, v)
+            if not same_particle(_wx.part(root, "_sparks"), j, (p, mo.streak(p, vel, cp, cdir), scale) if vis and scale[0] > 1e-9 else _wx.hidden(p)):
+                bad.append(("spark", f, j))
+    check("爆発 (単体): Maya 版と同じ計算 (回した爆心)", not bad, str(bad[:3]))
+    bpy.context.scene.frame_set(6)
+    ring = [Vector(p) for p in _wx.read_particle(_wx.part(root, "_rings"), 0)]
+    n = (ring[1] - ring[0]).cross(ring[2] - ring[0]).normalized()
+    check("爆発 (単体): 輪は爆心の上の向き (回した -Y) に沿って広がる", abs(abs(n.y) - 1) < 1e-4, str(tuple(n)))
+    center.location = (10, 0, 0)
+    bpy.context.view_layer.update()
+    ring = [Vector(p) for p in _wx.read_particle(_wx.part(root, "_rings"), 0)]
+    check("爆発 (単体): 爆心を動かすと付いてくる", abs(sum((p.x for p in ring), 0.0) / len(ring) - 10) < 0.2)
+    root["dfx_fire_count"] = 9
+    select(root)
+    op(bscene.UpdateEffectsTool)
+    check("爆発 (単体): 更新で数が変わる (爆心はそのまま)", _wx.part(root, "_fire").data["dfx_count"] == 9
+          and near(rt.control(root, "center").location, (10, 0, 0)))
+
+
+# ---------------------------------------------------------------- 放電
+@section
+def b16_discharge():
+    from dummy_effect_maker.blender.tools import _wx, _bullets as _bl, explosion as bex, lightning as bl
+    from dummy_effect_maker.tools import lightning as ml
+    from dummy_effect_maker import motion as mo
+    new_scene()
+    cam = scene_camera(loc=(0, -60, 10))
+    select(cam)
+    op(bl.DischargeRealTool, end_frame=20.0)
+    lone = bpy.data.objects.get("dfx_discharge1")
+    check("放電: コリジョンが無くても作れる (爆発は無し)", lone is not None and not _bl.read_hits(lone)
+          and _wx.part(lone, "_flashes") is None)
+    bpy.ops.mesh.primitive_plane_add(size=60)
+    ground = bpy.context.active_object
+    select(ground)
+    op(bex.ColliderSetTool)
+    select(cam)
+    op(bl.DischargeAnimeTool, start_frame=1.0, end_frame=60.0, burst_interval=4.0, reach=0.5,
+       fire_count=3, smoke_count=2, spark_count=3)
+    root = bpy.data.objects.get("dfx_dischargeAnime1")
+    start, end = rt.control(root, "start"), rt.control(root, "end")
+    for t, sx, ex_, ez in ((1, -12, -10, -0.2), (40, -8, 10, -0.2), (41, -8, 10, 3.0), (60, -8, 10, 3.0)):
+        start.location = (sx, 0, 8)
+        start.keyframe_insert("location", frame=t)
+        end.location = (ex_, 0, ez)
+        end.keyframe_insert("location", frame=t)
+    for obj in (start, end):
+        for fc in rt._fcurves(obj):
+            for k in fc.keyframe_points:
+                k.interpolation = "LINEAR"
+    select(root)
+    op(bscene.UpdateEffectsTool)
+    v = rt.read_params(root, ml.DISCHARGE_ANIME.stored_params())
+    hits = _bl.read_hits(root)
+    expect = []
+    for t in mo.discharge_samples(v):
+        a = tuple(rt.matrix_world_at(start, t).translation)
+        b = tuple(rt.matrix_world_at(end, t).translation)
+        p0, p1 = mo.discharge_probe(a, b, v["reach"])
+        if p0[2] > 0 >= p1[2]:
+            k = p0[2] / (p0[2] - p1[2])
+            expect.append((t, tuple(x + (y - x) * k for x, y in zip(p0, p1))))
+    ok = len(hits) == len(expect) >= 8 and all(abs(h["frame"] - t) < 1e-6 and near(h["pos"], p, 1e-3)
+                                               and near(h["normal"], (0, 0, 1), 1e-4) for h, (t, p) in zip(hits, expect))
+    check("放電: 終端の側が地面に当たっている間、爆発の間隔ごとに当たる (Z が上)", ok, str((len(hits), len(expect))))
+    bolt = _wx.part(root, "_bolt")
+    n, nb, m = list(bolt.data["dfx_strands"])
+    bad = []
+    for f in (1, 2, 5, 17, 33, 47, 60, 61):
+        bpy.context.scene.frame_set(f)
+        cp, cdir = _wx.camera_yup(root)
+        rows, alpha = mo.discharge_rows(mo.STYLE_ANIME, f, v, mo.yup_vector(tuple(start.matrix_world.translation)),
+                                        mo.yup_vector(tuple(end.matrix_world.translation)), cp, cdir, n, nb, m)
+        for j, (p, axes, w) in enumerate(rows):
+            if not same_particle(bolt, j, (p, axes, (w,) * 3) if w > 1e-9 else _wx.hidden(p)):
+                bad.append((f, j))
+                break
+    check("放電: Maya 版と同じ流れ方 (動く Empty)、終わったら消える", not bad, str(bad[:3]))
+    yh = bex.yup_hits(root)
+    bad = []
+    for f in (int(hits[0]["frame"]) + d for d in (1, 2, 5)):
+        bpy.context.scene.frame_set(f)
+        cp, cdir = _wx.camera_yup(root)
+        for e, hit in enumerate(yh):
+            p, sz, vis, roll = mo.explosion_flash(e, f, hit, v)
+            if not same_particle(_wx.part(root, "_flashes"), e, (p, mo.billboard(p, cp, cdir, roll), (sz,) * 3) if vis and sz > 1e-9 else _wx.hidden(p)):
+                bad.append(("flash", f, e))
+    check("放電: 小爆発は爆発と同じ計算 (当たった所ごと)", _wx.part(root, "_flashes").data["dfx_count"] == len(hits) and not bad,
+          str(bad[:3]))
+    path = os.path.join(TMP, "shot_discharge")
+    op(bscene.ExportShotTool, path=path, range_mode=bscene.RANGE_CUSTOM, start_frame=1.0, end_frame=10.0)
+    eff = [e for e in xc.read_shot(path + ".json")["effects"] if e["type"] == "discharge_anime"][0]
+    check("放電: 書き出し (当たり・発生と終端)", len(eff["data"]["hits"]) == len(hits)
+          and sorted(c["role"] for c in eff["controls"]) == ["end", "start"])
+
+
 @section
 def b05_delete_all():
     op(bscene.DeleteAllTool)
@@ -957,7 +1090,8 @@ def b05_delete_all():
 
 for fn in (b01_register, b02_vulcan, b03_shockwave, b04_export, b05_delete_all, b06_wind,
            b07_rain_snow, b08_dust_sparks, b09_homing_energy, b10_explosion,
-           b11_shakes, b12_export_more, b13_nuke, b14_lightning):
+           b11_shakes, b12_export_more, b13_nuke, b14_lightning,
+           b15_explosion_single, b16_discharge):
     fn()
 fails = [r for r in RESULTS if not r[1]]
 print("\nSUMMARY: %d passed, %d failed" % (len(RESULTS) - len(fails), len(fails)))

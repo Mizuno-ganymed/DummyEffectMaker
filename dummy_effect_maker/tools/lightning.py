@@ -167,14 +167,19 @@ def _create_points(cmds, mu, root, v, camera=None, target=None):
     return made
 
 
-def _head(root):
-    """カメラ・雲の点 $top・落ちる所 $gnd と、今光っている回 $c / 始まり $ts、本筋の向き (lightning_frame)。"""
-    r = wx.short(root)
-    td, gd = wx.track_name(root, wx.EMITTER_ATTR), wx.track_name(root, wx.STRIKE_ATTR)
-    return wx.mel_head(root, need_camera=True, need_wind=False) + u"""
-vector $top = <<{td}.outputTranslateX, {td}.outputTranslateY, {td}.outputTranslateZ>>;
-vector $gnd = <<{gd}.outputTranslateX, {gd}.outputTranslateY, {gd}.outputTranslateZ>>;
-float $f = frame;
+def _strike_code(r, discharge):
+    """今光っている回 $c と始まり $ts (稲妻: lightning_strike / 放電: discharge_strike と同じ)。"""
+    if discharge:
+        return u"""float $f = frame;
+int $c = -1;
+float $ts = 0;
+float $chg = max({r}.dfx_change_frames, 0.5);
+if ($f >= {r}.dfx_start_frame && $f <= {r}.dfx_end_frame) {{
+    $c = floor(($f - {r}.dfx_start_frame) / $chg);
+    $ts = {r}.dfx_start_frame + $c * $chg;
+}}
+""".format(r=r)
+    return u"""float $f = frame;
 int $c = -1;
 float $ts = 0;
 float $tt = {r}.dfx_start_frame;
@@ -184,17 +189,31 @@ for ($ci = 0; $ci < {r}.dfx_count; $ci++) {{
     if ($tt > $f) break;
     if ($f < $tt + {r}.dfx_duration) {{ $c = $ci; $ts = $tt; break; }}
 }}
-float $sp = {r}.dfx_spread;
+""".format(r=r, h51=_hash("$ci", 0, 51))
+
+
+def _head(root, discharge=False):
+    """カメラ・雲の点 $top・落ちる所 $gnd と、今光っている回 $c / 始まり $ts、本筋の向き (lightning_frame)。
+
+    放電では $top = 発生、$gnd = 終端。伸びは一瞬 ($prog = 1)。
+    """
+    r = wx.short(root)
+    td, gd = wx.track_name(root, wx.EMITTER_ATTR), wx.track_name(root, wx.STRIKE_ATTR)
+    return wx.mel_head(root, need_camera=True, need_wind=False) + u"""
+vector $top = <<{td}.outputTranslateX, {td}.outputTranslateY, {td}.outputTranslateZ>>;
+vector $gnd = <<{gd}.outputTranslateX, {gd}.outputTranslateY, {gd}.outputTranslateZ>>;
+""".format(td=td, gd=gd) + _strike_code(r, discharge) + u"""float $sp = {r}.dfx_spread;
 vector $t0 = $top + <<({h52} - 0.5) * $sp, 0, ({h53} - 0.5) * $sp>>;
 vector $g0 = $gnd + <<({h54} - 0.5) * 2 * $sp, 0, ({h55} - 0.5) * 2 * $sp>>;
 vector $dd = $g0 - $t0;
 float $len = mag($dd);
 vector $d = <<0, -1, 0>>;
 if ($len > 1e-9) $d = unit($dd);
-""".format(r=r, td=td, gd=gd, h51=_hash("$ci", 0, 51), h52=_hash("$c", 0, 52), h53=_hash("$c", 0, 53),
+""".format(r=r, h52=_hash("$c", 0, 52), h53=_hash("$c", 0, 53),
            h54=_hash("$c", 0, 54), h55=_hash("$c", 0, 55)) + wx.mel_ortho("$A", "$d", "<<1, 0, 0>>") + u"""vector $B = cross($d, $A);
-float $prog = clamp(0, 1, ($f - $ts) / max({r}.dfx_grow_frames, 0.01));
-float $jagM = $len * {r}.dfx_jag;
+""" + (u"float $prog = 1;" + chr(10) if discharge else u"""float $prog = 1;
+if ({r}.dfx_grow_frames > 0) $prog = clamp(0, 1, ($f - $ts) / {r}.dfx_grow_frames);
+""".format(r=r)) + u"""float $jagM = $len * {r}.dfx_jag;
 """.format(r=r)
 
 
@@ -275,9 +294,9 @@ def _rows_code(count, r, a, style=None):
 """
 
 
-def _main_expression(style, root, n, bolt_shader, glow_shader):
+def _main_expression(style, root, n, bolt_shader, glow_shader, discharge=False):
     r = wx.short(root)
-    code = _head(root) + u"""float $o[];
+    code = _head(root, discharge) + u"""float $o[];
 vector $P[];
 float $W[];
 int $k; int $j;
@@ -299,11 +318,12 @@ if ($c >= 0) {{
     float $ph = floor($f - $ts);
     float $on = 0;
     if ($ph <= 0 || {h90} >= {r}.dfx_flicker) $on = 1;
-    $al = {r}.dfx_opacity * $on * (1 - 0.5 * clamp(0, 1, ($f - $ts) / max({r}.dfx_duration, 0.01)));
+    $al = {r}.dfx_opacity * $on * (1 - 0.5 * clamp(0, 1, ($f - $ts) / max({dur}, 0.01)));
 }}
 float $tb = 1 - $al;
 {b}.outTransparencyR = $tb; {b}.outTransparencyG = $tb; {b}.outTransparencyB = $tb;
-""".format(r=r, h90=_hash("$c", "$ph", 90), b=wx.short(bolt_shader))
+""".format(r=r, h90=_hash("$c", "$ph", 90), b=wx.short(bolt_shader),
+           dur=(u"max(%s.dfx_change_frames, 0.5)" % r) if discharge else (u"%s.dfx_duration" % r))
     if glow_shader:
         code += u"""float $tg = 1 - $al * {r}.dfx_glow_opacity;
 {g}.outTransparencyR = $tg; {g}.outTransparencyG = $tg; {g}.outTransparencyB = $tg;
@@ -311,10 +331,10 @@ float $tb = 1 - $al;
     return code
 
 
-def _branch_expression(style, root, n, m, br):
+def _branch_expression(style, root, n, m, br, discharge=False):
     r = wx.short(root)
     m1 = repr(float(max(m - 1, 1)))
-    code = _head(root) + u"""float $o[];
+    code = _head(root, discharge) + u"""float $o[];
 vector $P[];
 float $W[];
 int $j; int $k;
@@ -378,7 +398,7 @@ def _skinned(cmds, name, root, joints, points, faces, per, owned):
     return mesh
 
 
-def build(cmds, mu, root, v, style):
+def build(cmds, mu, root, v, style, discharge=False):
     prefix = wx.short(root)
     owned = []
     wx.track_links(cmds, mu, root, owned)
@@ -410,13 +430,16 @@ def build(cmds, mu, root, v, style):
         shaders.append(shader)
     outputs = wx.TRANSFORM_OUTPUTS[:9]
     owned.append(cmds.expression(name=prefix + "_main", alwaysEvaluate=True, unitConversion="all",
-                                 string=_main_expression(style, root, n, shaders[0], shaders[1])
+                                 string=_main_expression(style, root, n, shaders[0], shaders[1], discharge)
                                  + wx.mel_writes(joints[:rn], outputs)))
     for br in range(nb):
         js = joints[rn + br * rm:rn + (br + 1) * rm]
         owned.append(cmds.expression(name="%s_branch_%02d" % (prefix, br + 1), alwaysEvaluate=True,
                                      unitConversion="all",
-                                     string=_branch_expression(style, root, n, m, br) + wx.mel_writes(js, outputs)))
+                                     string=_branch_expression(style, root, n, m, br, discharge)
+                                     + wx.mel_writes(js, outputs)))
+    if discharge:
+        _build_bursts(cmds, mu, root, v, owned)
     wx.finish(cmds, mu, root, owned)
 
 
@@ -432,4 +455,145 @@ ANIME = wx.register(wx.Kind("lightning_anime", LightningAnimeTool, "dfx_lightnin
                             _live(LightningAnimeTool, ANIME_REBUILD), ANIME_REBUILD,
                             build=lambda cmds, mu, root, v: build(cmds, mu, root, v, mo.STYLE_ANIME),
                             create=_create_points, need_camera=True, need_wind=False))
-STYLES = {"lightning_real": mo.STYLE_REAL, "lightning_anime": mo.STYLE_ANIME}
+
+
+# ---------------------------------------------------------------- 放電 (2 つのロケータの間に流れ続ける)
+# 稲妻の 1 回ごとの項目の代わりに、開始〜終わりのフレームの間ずっと流れ、「形が変わる間隔」ごとに形が変わる。
+# 終端の側 (発生と終端の真ん中から、終端の少し先まで) がコリジョンに当たっていると、「爆発の間隔」ごとに小爆発する
+# (爆発と同じ部品とパラメータ。終端を地面に沿って動かすと、地面をえぐっていくように爆発が続く)。
+_STRIKE_ONLY = ("count", "interval", "interval_random", "duration", "grow_frames", "height")
+BURST_COUNTS = ("fire_count", "smoke_count", "spark_count")
+DISCHARGE_REBUILD = ("burst_interval", "reach") + BURST_COUNTS
+
+
+def _discharge_params(real):
+    from .explosion import _explosion_params
+    base = [p for p in _params(real) if p.name not in _STRIKE_ONLY]
+    extra = [Param("end_frame", u"終わりのフレーム", 60.0, decimals=2, tooltip=u"放電が止まるフレーム"),
+             Param("change_frames", u"形が変わる間隔 (フレーム)", 2.0, minimum=0.5, step=1.0, decimals=1,
+                   tooltip=u"何フレームごとに稲妻の形が変わるか (小さいほどバチバチする)")]
+    for p in base:
+        if p.name == "spread":
+            p.label, p.default = u"先のぶれ", 0.3
+            p.tooltip = u"形が変わるたびに、発生と終端の点が横にずれる幅"
+        if p.name == "flicker":
+            p.default = 0.15
+    i = [p.name for p in base].index("start_frame") + 1
+    base[i:i] = extra
+    bursts = [Param("burst_interval", u"爆発の間隔 (フレーム)", 3.0, minimum=0.5, step=1.0, decimals=1,
+                    tooltip=u"コリジョンに当たっている間、何フレームごとに小爆発するか"),
+              Param("reach", u"当たりの届く長さ", 0.5, minimum=0.0, step=0.1,
+                    tooltip=u"終端より、どれだけ先までコリジョンに当たるか調べるか (地面の少し上でも当たるように)")]
+    explosion = [p for p in _explosion_params() if p.name not in ("hide_bullet", "substeps", "opacity", "seed")]
+    for p in explosion:
+        if p.name == "size":
+            p.label, p.default = u"爆発の大きさ", 0.6
+    return base + bursts + explosion
+
+
+class DischargeRealTool(BaseTool):
+    label = u"放電 (実写)"
+    tab = TAB
+    category = CATEGORY
+    order = 886
+    tooltip = (u"発生と終端の 2 つのロケータの間に、細い稲妻が流れ続けます (ロケータにはキーを打てます)。\n"
+               u"終端の側がコリジョンに当たると小爆発します (終端を地面に沿って動かすと、地面をえぐる攻撃に)。\n"
+               u"ロケータやコリジョンを動かしたら「天候を更新」で爆発の場所を計算し直します。")
+    params = _discharge_params(True)
+
+    def run(self, ctx, **v):
+        from maya import cmds
+        from . import _maya_utils as mu
+        return _create_discharge(cmds, mu, ctx, v, DISCHARGE_REAL)
+
+
+class DischargeAnimeTool(BaseTool):
+    label = u"放電 (アニメ)"
+    tab = TAB
+    category = CATEGORY
+    order = 887
+    tooltip = (u"発生と終端の 2 つのロケータの間に、太い円柱の稲妻が流れ続けます (ロケータにはキーを打てます)。\n"
+               u"終端の側がコリジョンに当たると小爆発します (終端を地面に沿って動かすと、地面をえぐる攻撃に)。\n"
+               u"ロケータやコリジョンを動かしたら「天候を更新」で爆発の場所を計算し直します。")
+    params = _discharge_params(False)
+
+    def run(self, ctx, **v):
+        from maya import cmds
+        from . import _maya_utils as mu
+        return _create_discharge(cmds, mu, ctx, v, DISCHARGE_ANIME)
+
+
+def _create_discharge(cmds, mu, ctx, v, kind):
+    from . import explosion as ex
+    root = wx.create_effect(cmds, mu, ctx, v, kind)
+    hits = ex.read_hits(cmds, root) if cmds.attributeQuery(ex.HITS_ATTR, node=root, exists=True) else []
+    if not ex.colliders(cmds):
+        ctx.log(u"  コリジョンが無いので爆発はしません (ぶつける相手を「コリジョンに指定」して「天候を更新」)")
+    else:
+        ctx.log(u"  終端の側がコリジョンに %d 回当たります" % len(hits))
+    return root
+
+
+def _create_ends(cmds, mu, root, v, camera=None, target=None):
+    """発生 (_start) と終端 (_end) のロケータ。オブジェクトを選んでいれば、終端をその位置に。"""
+    prefix = wx.short(root)
+    made = []
+    for name, attr, pos, color in (("start", wx.EMITTER_ATTR, (0.0, 8.0, 0.0), 17),
+                                   ("end", wx.STRIKE_ATTR, (6.0, 0.0, 0.0), 13)):
+        loc = cmds.spaceLocator(name="%s_%s" % (prefix, name))[0]
+        loc = cmds.ls(cmds.parent(loc, root, relative=True)[0], long=True)[0]
+        shape = cmds.listRelatives(loc, shapes=True, fullPath=True)[0]
+        cmds.setAttr(shape + ".overrideEnabled", 1)
+        cmds.setAttr(shape + ".overrideColor", color)
+        cmds.setAttr(loc + ".translate", *pos, type="double3")
+        mu.tag(loc)
+        wx.link(cmds, root, attr, loc)
+        made.append(loc)
+    if target:
+        p = cmds.xform(target, query=True, worldSpace=True, translation=True)
+        cmds.xform(made[1], worldSpace=True, translation=p)
+        cmds.xform(made[0], worldSpace=True, translation=(p[0] - 6.0, p[1] + 8.0, p[2]))
+    return made
+
+
+def discharge_probes(cmds, root, v):
+    """当たりを調べる線分 [(フレーム, 始まり, 終わり)] (motion.discharge_samples / discharge_probe と同じ)。"""
+    start = wx.find_link(cmds, root, wx.EMITTER_ATTR)
+    end = wx.find_link(cmds, root, wx.STRIKE_ATTR)
+    out = []
+    for t in mo.discharge_samples(v):
+        a = cmds.getAttr(start + ".worldMatrix[0]", time=t)[12:15]
+        b = cmds.getAttr(end + ".worldMatrix[0]", time=t)[12:15]
+        p0, p1 = mo.discharge_probe(tuple(a), tuple(b), v["reach"])
+        out.append((t, p0, p1))
+    return out
+
+
+def _build_bursts(cmds, mu, root, v, owned):
+    """終端の側がコリジョンに当たった所に小爆発 (爆発の部品をそのまま使う)。"""
+    from . import explosion as ex
+    if not cmds.attributeQuery(ex.HITS_ATTR, node=root, exists=True):
+        cmds.addAttr(root, longName=ex.HITS_ATTR, dataType="doubleArray")
+    cols = ex.colliders(cmds)
+    hits = ex.probe_hits(cmds, cols, discharge_probes(cmds, root, v)) if cols else []
+    ex.store_hits(cmds, root, hits)
+    ex.build_parts(cmds, mu, root, dict(v, opacity=1.0), hits, owned)
+
+
+def _discharge_live(tool, rebuild):
+    return tuple(p.name for p in tool.params if p.name not in rebuild)
+
+
+DISCHARGE_REAL = wx.register(wx.Kind(
+    "discharge_real", DischargeRealTool, "dfx_discharge#", u"放電 (実写)",
+    _discharge_live(DischargeRealTool, REBUILD + DISCHARGE_REBUILD), REBUILD + DISCHARGE_REBUILD,
+    build=lambda cmds, mu, root, v: build(cmds, mu, root, v, mo.STYLE_REAL, discharge=True),
+    create=_create_ends, need_camera=True, need_wind=False))
+DISCHARGE_ANIME = wx.register(wx.Kind(
+    "discharge_anime", DischargeAnimeTool, "dfx_dischargeAnime#", u"放電 (アニメ)",
+    _discharge_live(DischargeAnimeTool, ANIME_REBUILD + DISCHARGE_REBUILD), ANIME_REBUILD + DISCHARGE_REBUILD,
+    build=lambda cmds, mu, root, v: build(cmds, mu, root, v, mo.STYLE_ANIME, discharge=True),
+    create=_create_ends, need_camera=True, need_wind=False))
+DISCHARGE_TYPES = ("discharge_real", "discharge_anime")
+STYLES = {"lightning_real": mo.STYLE_REAL, "lightning_anime": mo.STYLE_ANIME,
+          "discharge_real": mo.STYLE_REAL, "discharge_anime": mo.STYLE_ANIME}
