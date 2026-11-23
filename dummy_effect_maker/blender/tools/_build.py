@@ -10,11 +10,22 @@ import bpy
 from .. import runtime as rt
 
 BUILDERS = {}   # effect_type → (stored_params(), live, build(root, values))
+RELEASERS = {}  # effect_type → release(root): 消す前に、ほかの物に加えた変更を元に戻す (画ぶれなど)
 
 
 def register_builder(effect_type, stored_params, live, build, update):
     BUILDERS[effect_type] = (stored_params, live, build)
     rt.register_updater(effect_type, update)
+
+
+def register_releaser(effect_type, fn):
+    RELEASERS[effect_type] = fn
+
+
+def release(root):
+    fn = RELEASERS.get(root.get(rt.TYPE_KEY))
+    if fn is not None:
+        fn(root)
 
 
 def rebuild(root, overrides=None):

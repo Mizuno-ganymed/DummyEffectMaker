@@ -14,7 +14,7 @@ from mathutils import Vector
 from ...core import BaseTool
 from ...tools import homing, vulcan as mv
 from .. import runtime as rt
-from . import _build as bd
+from . import _build as bd, _bullets as _bl
 
 
 class VulcanTool(BaseTool):
@@ -46,12 +46,7 @@ class VulcanTool(BaseTool):
 
 def build(root, v):
     frames = homing.check_fire_frames(v)
-    mesh = bd.sphere_mesh(root.name + "_bulletMesh", v["subdivisions"], root)
-    mat = rt.flat_material(root.name + "_mat", v["color"], 1.0, owner=root)
-    mesh.materials.append(mat)
-    root["dfx_mesh"] = mesh
-    root["dfx_material"] = mat
-    root["dfx_mesh_sub"] = int(v["subdivisions"])
+    mesh, _ = _bl.sphere_material(root, v, "_bulletMesh", v["color"], v["subdivisions"])
     for i, fire in enumerate(frames):
         obj = bd.new_object(root, "%s_bullet_%03d" % (root.name, i + 1), mesh)
         obj["dfx_fire"] = float(fire)
@@ -59,9 +54,34 @@ def build(root, v):
 
 
 def bullets(root):
-    import bpy
-    return sorted((o for o in bpy.data.objects if o.get(rt.OWNER_KEY) == root and "dfx_fire" in o),
-                  key=lambda o: o.name)
+    return _bl.bullet_objects(root)
+
+
+def _state(v, muzzle, target, fire, frame, cache):
+    """弾 1 発の (位置, 進む向き, 表示)。発射した時点の発射位置・目標で決まる。"""
+    travel = max(v["travel_frames"], 0.001)
+    if fire not in cache:
+        cache[fire] = (rt.matrix_world_at(muzzle, fire).translation.copy(),
+                       rt.matrix_world_at(target, fire).translation.copy())
+    a, c = cache[fire]
+    min_ratio = min(max(v["min_speed"] / 100.0, 0.0), 1.0)
+    p = mv.bullet_position(tuple(a), tuple(c), frame, fire, travel, v["speed_mode"], min_ratio)
+    return Vector(p), Vector(c) - Vector(a), mv.bullet_visible(frame, fire, travel)
+
+
+def sampler(root):
+    v = rt.read_params(root, mv.stored_params())
+    muzzle, target = rt.control(root, "muzzle"), rt.control(root, "target")
+    fires = [b["dfx_fire"] for b in bullets(root)]
+    cache = {}
+
+    def at(t):
+        out = []
+        for fire in fires:
+            p, _, vis = _state(v, muzzle, target, fire, t, cache)
+            out.append((p, vis))
+        return out
+    return at
 
 
 def update(root, frame):
@@ -69,30 +89,22 @@ def update(root, frame):
     muzzle, target = rt.control(root, "muzzle"), rt.control(root, "target")
     if muzzle is None or target is None:
         return
-    mesh, mat = root.get("dfx_mesh"), root.get("dfx_material")
-    if mesh is not None and root.get("dfx_mesh_sub") != int(v["subdivisions"]):
-        bd.fill_sphere(mesh, v["subdivisions"])
-        root["dfx_mesh_sub"] = int(v["subdivisions"])
-    if mat is not None:
-        rt.set_material(mat, v["color"])
-    travel = max(v["travel_frames"], 0.001)
-    min_ratio = min(max(v["min_speed"] / 100.0, 0.0), 1.0)
+    _bl.refresh_sphere(root, v["subdivisions"], v["color"])
     squashed = v["shape"] == homing.SHAPE_SQUASHED
     radius = v["radius"]
     size = (radius * (v["stretch"] if squashed else 1.0), radius, radius)
-    for b in bullets(root):
-        fire = b["dfx_fire"]
-        if not mv.bullet_visible(frame, fire, travel):
+    hidden = _bl.hide_frames(root)
+    cache = {}
+    for i, b in enumerate(bullets(root)):
+        p, d, vis = _state(v, muzzle, target, b["dfx_fire"], frame, cache)
+        if not vis or _bl.is_hit(hidden, i, frame):
             b.scale = (0.0, 0.0, 0.0)
             continue
-        a = rt.matrix_world_at(muzzle, fire).translation
-        c = rt.matrix_world_at(target, fire).translation
-        p = mv.bullet_position(tuple(a), tuple(c), frame, fire, travel, v["speed_mode"], min_ratio)
         b.location = p
-        d = Vector(c) - Vector(a)
         if d.length > 1e-9:
             b.rotation_quaternion = d.to_track_quat("X", "Z")
         b.scale = size
 
 
 bd.register_builder(mv.EFFECT_TYPE, mv.stored_params, mv.LIVE_PARAMS, build, update)
+_bl.register_sampler(mv.EFFECT_TYPE, sampler)

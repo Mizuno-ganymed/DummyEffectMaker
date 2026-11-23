@@ -89,14 +89,9 @@ def cylinder_layout(sides=48):
 
 def texture_aspect(path):
     """テクスチャの 縦 / 横 (模様の高さ = 模様の大きさ × これ)。読めなければ 1。"""
-    try:
-        from ..ui.qt import QtGui
-        size = QtGui.QImageReader(path).size()
-        if size.width() > 0 and size.height() > 0:
-            return size.height() / float(size.width())
-    except Exception:
-        pass
-    return 1.0
+    from .. import textures
+    size = textures.image_size(path)
+    return size[1] / float(size[0]) if size else 1.0
 
 
 def far_repeat(radius, height, tile, aspect):

@@ -88,7 +88,8 @@ def own(root, *ids):
 def owned(root):
     """root が作った物 (オブジェクト・メッシュ・マテリアル)。"""
     out = []
-    for coll in (bpy.data.objects, bpy.data.meshes, bpy.data.materials):
+    for coll in (bpy.data.objects, bpy.data.meshes, bpy.data.materials, bpy.data.curves,
+                 bpy.data.lattices):
         out += [idb for idb in coll if idb.get(OWNER_KEY) == root]
     return out
 
@@ -108,7 +109,7 @@ def delete_owned(root):
     for idb in owned(root):
         if isinstance(idb, bpy.types.Object):
             bpy.data.objects.remove(idb, do_unlink=True)
-    for coll in (bpy.data.meshes, bpy.data.materials):
+    for coll in (bpy.data.meshes, bpy.data.materials, bpy.data.curves, bpy.data.lattices):
         for idb in list(coll):
             if idb.get(OWNER_KEY) == root and idb.users == 0:
                 coll.remove(idb)
@@ -243,11 +244,25 @@ def matrix_basis_at(obj, frame):
 
 
 def matrix_world_at(obj, frame):
-    """obj のワールドの行列 (親もたどる。コンストレイント・ドライバーは見ない)。"""
+    """obj のワールドの行列 (親もたどる。コンストレイント・ドライバーは見ない)。
+
+    キーも親も無い物 (コンストレイントで動く物など) は、今の matrix_world を使う。
+    """
+    if obj.animation_data is None and obj.parent is None:
+        return obj.matrix_world.copy()
     m = matrix_basis_at(obj, frame)
     if obj.parent is not None:
         m = matrix_world_at(obj.parent, frame) @ obj.matrix_parent_inverse @ m
     return m
+
+
+def prop_at(obj, key, frame):
+    """カスタムプロパティ obj[key] の frame の値 (キーがあればキーから)。"""
+    path = '["%s"]' % key
+    for fc in _fcurves(obj):
+        if fc.data_path == path and fc.array_index == 0:
+            return fc.evaluate(frame)
+    return obj.get(key)
 
 
 # ---------------------------------------------------------------- 毎フレームの更新
@@ -260,11 +275,12 @@ def update_root(root, frame=None):
     fn = UPDATERS.get(root.get(TYPE_KEY))
     if fn is None:
         return
+    busy = _BUSY[0]
     _BUSY[0] = True
     try:
         fn(root, current_frame() if frame is None else frame)
     finally:
-        _BUSY[0] = False
+        _BUSY[0] = busy
 
 
 def update_all(scene=None):

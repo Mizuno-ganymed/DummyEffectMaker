@@ -38,7 +38,6 @@ WIND_POSTROLL = 60
 
 CHUNK = 10               # エクスプレッション 1 つが受け持つ粒の数 (多いと作成が遅く、少ないと再生が遅い)
 TEXTURE_DIR = "dfx_weather"
-TEXTURE_VERSION = 1
 
 KINDS = {}               # effect_type → Kind (各モジュールが登録する)
 
@@ -565,13 +564,19 @@ def texture_path(cmds, name):
     folder = os.path.join(root, rule, TEXTURE_DIR)
     if not os.path.isdir(folder):
         os.makedirs(folder)
-    path = os.path.join(folder, "dfx_%s_v%d.png" % (name, TEXTURE_VERSION)).replace("\\", "/")
+    from .. import textures
+    path = os.path.join(folder, textures.file_name(name)).replace("\\", "/")
     if not os.path.isfile(path):
-        TEXTURES[name](path)
+        textures.make(name, path)
     return path
 
 
 TEXTURE_PARAM = "texture"
+
+
+def _texture_version():
+    from .. import textures
+    return textures.VERSION
 
 
 def texture_param(default_name, tiling):
@@ -579,7 +584,7 @@ def texture_param(default_name, tiling):
     from ..core import Param
     tip = (u"貼る絵のファイル (透明度付きの PNG など)。空欄ならツールが作る既定の絵 "
            u"(sourceimages/dfx_weather/dfx_%s_v%d.png)。\n"
-           u"白っぽく描くと「色」で色を付けられる。" % (default_name, TEXTURE_VERSION))
+           u"白っぽく描くと「色」で色を付けられる。" % (default_name, _texture_version()))
     if tiling:
         tip += u"\nこの絵は繰り返して貼るので、上下 (と左右) の端がつながる絵にする"
     return Param(TEXTURE_PARAM, u"テクスチャのファイル", u"", kind="file", tooltip=tip)
@@ -596,161 +601,6 @@ def resolve_texture(cmds, v, default_name):
     return path
 
 
-def _image(w, h):
-    from ..ui.qt import QtGui
-    img = QtGui.QImage(w, h, QtGui.QImage.Format_ARGB32)
-    img.fill(QtGui.QColor(0, 0, 0, 0))
-    return img
-
-
-def _painter(img):
-    from ..ui.qt import QtCore, QtGui
-    p = QtGui.QPainter(img)
-    p.setRenderHint(QtGui.QPainter.Antialiasing)
-    p.setPen(QtCore.Qt.NoPen)
-    return p
-
-
-def make_rain_texture(path):
-    """縦に繰り返せる雨の筋 (白、透明度付き)。"""
-    from ..ui.qt import QtCore, QtGui
-    w, h = 256, 512
-    img = _image(w, h)
-    p = _painter(img)
-    rng = random.Random("dfx-rain")
-    for _ in range(70):
-        x = rng.uniform(0, w)
-        y = rng.uniform(0, h)
-        length = rng.uniform(40, 140)
-        width = rng.uniform(1.0, 2.2)
-        p.setBrush(QtGui.QColor(255, 255, 255, int(rng.uniform(120, 255))))
-        for dy in (0, -h, h):
-            p.drawRoundedRect(QtCore.QRectF(x, y + dy, width, length), width / 2, width / 2)
-    p.end()
-    img.save(path)
-
-
-def make_snow_texture(path):
-    """上下左右に繰り返せる雪の粒。"""
-    from ..ui.qt import QtCore, QtGui
-    w = h = 512
-    img = _image(w, h)
-    p = _painter(img)
-    rng = random.Random("dfx-snow")
-    for _ in range(160):
-        x, y = rng.uniform(0, w), rng.uniform(0, h)
-        r = rng.uniform(1.5, 5.0)
-        p.setBrush(QtGui.QColor(255, 255, 255, int(rng.uniform(170, 255))))
-        for dx in (0, -w, w):
-            for dy in (0, -h, h):
-                p.drawEllipse(QtCore.QPointF(x + dx, y + dy), r, r)
-    p.end()
-    img.save(path)
-
-
-def make_puff_texture(path):
-    """アニメ調の煙の塊 (丸の集まり。下が影色、上がハイライトの 2 色、ふちはくっきり)。"""
-    from ..ui.qt import QtCore, QtGui
-    size = 256
-    img = _image(size, size)
-    p = _painter(img)
-    rng = random.Random("dfx-puff")
-    circles = [(128, 140, 70)]
-    for _ in range(7):
-        a = rng.uniform(0, 2 * math.pi)
-        d = rng.uniform(35, 60)
-        circles.append((128 + d * math.cos(a), 140 + d * math.sin(a) * 0.7, rng.uniform(32, 48)))
-    path_union = QtGui.QPainterPath()
-    for x, y, r in circles:
-        c = QtGui.QPainterPath()
-        c.addEllipse(QtCore.QPointF(x, y), r, r)
-        path_union = path_union.united(c)
-    p.setBrush(QtGui.QColor(170, 170, 170, 255))
-    p.drawPath(path_union)
-    p.setClipPath(path_union)
-    p.setBrush(QtGui.QColor(255, 255, 255, 255))
-    for x, y, r in circles:
-        p.drawEllipse(QtCore.QPointF(x - r * 0.12, y - r * 0.18), r * 0.82, r * 0.82)
-    p.end()
-    img.save(path)
-
-
-def _value_noise(w, h, cells, seed, octaves=4):
-    """上下左右に繰り返せる値ノイズ (0〜1) の 2 次元リスト。"""
-    rng = random.Random(seed)
-    layers = []
-    for o in range(octaves):
-        n = cells * (2 ** o)
-        layers.append((n, [[rng.random() for _ in range(n)] for _ in range(n)], 0.5 ** o))
-    total = sum(a for _, _, a in layers)
-    out = []
-    for y in range(h):
-        row = []
-        for x in range(w):
-            v = 0.0
-            for n, grid, amp in layers:
-                fx, fy = x * n / float(w), y * n / float(h)
-                ix, iy = int(fx), int(fy)
-                tx, ty = fx - ix, fy - iy
-                tx, ty = tx * tx * (3 - 2 * tx), ty * ty * (3 - 2 * ty)
-                a = grid[iy % n][ix % n]
-                b = grid[iy % n][(ix + 1) % n]
-                c = grid[(iy + 1) % n][ix % n]
-                d = grid[(iy + 1) % n][(ix + 1) % n]
-                v += amp * ((a + (b - a) * tx) * (1 - ty) + (c + (d - c) * tx) * ty)
-            row.append(v / total)
-        out.append(row)
-    return out
-
-
-def _posterize(v, levels=(0.42, 0.55, 0.68), alphas=(0.0, 0.35, 0.7, 1.0), soft=0.02):
-    """アニメ調の段 (くっきりした濃さの段に分ける。境目だけ少しぼかす)。"""
-    a = alphas[0]
-    for edge, value in zip(levels, alphas[1:]):
-        t = min(1.0, max(0.0, (v - edge + soft) / (2 * soft)))
-        a = a + (value - a) * t if t > 0 else a
-    return a
-
-
-def _save_alpha(path, w, h, alpha_rows):
-    from ..ui.qt import QtGui
-    img = _image(w, h)
-    for y, row in enumerate(alpha_rows):
-        for x, a in enumerate(row):
-            img.setPixel(x, y, QtGui.qRgba(255, 255, 255, int(255 * min(1.0, max(0.0, a)))))
-    img.save(path)
-
-
-def make_fog_tile_texture(path):
-    """繰り返せる霧の模様 (段になった濃さ)。地霧の重ね板用。"""
-    w = h = 256
-    noise = _value_noise(w, h, 3, "dfx-fog-tile")
-    _save_alpha(path, w, h, [[_posterize(v) for v in row] for row in noise])
-
-
-def make_fog_card_texture(path):
-    """霧の板 1 枚分 (ふちに向かって消える、段になった雲の形)。"""
-    w = h = 256
-    noise = _value_noise(w, h, 2, "dfx-fog-card", octaves=3)
-    rows = []
-    for y, row in enumerate(noise):
-        out = []
-        for x, v in enumerate(row):
-            d = math.hypot((x - w / 2.0) / (w / 2.0), (y - h / 2.0) / (h / 2.0))
-            fall = max(0.0, 1.0 - d) ** 0.8
-            out.append(_posterize(v * 0.55 + fall * 0.6, levels=(0.5, 0.65, 0.8),
-                                  alphas=(0.0, 0.3, 0.6, 0.9)))
-        rows.append(out)
-    _save_alpha(path, w, h, rows)
-
-
-TEXTURES = {
-    "rain": make_rain_texture,
-    "snow": make_snow_texture,
-    "puff": make_puff_texture,
-    "fog_tile": make_fog_tile_texture,
-    "fog_card": make_fog_card_texture,
-}
 
 
 # ---------------------------------------------------------------- 種類と共通のツール処理
