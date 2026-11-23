@@ -880,3 +880,24 @@ def test_weather_layer_helpers():
     assert weather_layers.ground_layer_opacity(0.6, 2.0, 2, 4) == 0.6 * 0.25
     pts, faces, uvs, uv_ids = weather_layers.cylinder_layout(8)
     assert len(pts) == 16 and len(faces) == 8 and len(uvs) == 18 and max(uv_ids) == 17
+
+
+def test_file_param_and_weather_texture_option():
+    p = Param("t", "t", "", kind="file")
+    assert p.coerce(None) == "" and p.coerce("C:/a.png") == "C:/a.png"
+    with_texture = [k.effect_type for k in wx.KINDS.values()
+                    if "texture" in [p.name for p in k.tool.params]]
+    assert sorted(with_texture) == sorted(["dust", "rain_far", "snow_far", "fog", "ground_fog",
+                                           "ground_crawl"])
+    for name in with_texture:
+        kind = wx.KINDS[name]
+        assert "texture" in kind.rebuild and "texture" not in kind.live
+        assert [p for p in kind.tool.params if p.name == "texture"][0].kind == "file"
+
+
+def test_file_param_roundtrips_in_presets():
+    with _TempDir() as d:
+        params = [Param("texture", "t", "", kind="file"), Param("n", "n", 1)]
+        path = os.path.join(d, "p.json")
+        presets.save_preset(path, "dust", params, {"texture": u"D:/絵/煙.png", "n": 3})
+        assert presets.load_preset(path, "dust", params) == {"texture": u"D:/絵/煙.png", "n": 3}

@@ -13,9 +13,10 @@ class Param(object):
     明示指定が必要なもの:
         kind="choice" : choices にリストを渡す。値は選択肢の文字列
         kind="color"  : default に (r, g, b) 0.0-1.0 のタプル
+        kind="file"   : ファイルのパス (文字列)。ダイアログに「参照...」ボタンが付く
     """
 
-    KINDS = ("bool", "int", "float", "str", "choice", "color")
+    KINDS = ("bool", "int", "float", "str", "choice", "color", "file")
 
     def __init__(self, name, label, default, kind=None, minimum=None,
                  maximum=None, step=None, decimals=3, choices=None,
@@ -59,8 +60,8 @@ class Param(object):
             if self.maximum is not None:
                 value = min(self.maximum, value)
             return value
-        if self.kind == "str":
-            return str(value)
+        if self.kind in ("str", "file"):
+            return u"%s" % (value or u"")
         if self.kind == "choice":
             value = str(value)
             if value not in self.choices:

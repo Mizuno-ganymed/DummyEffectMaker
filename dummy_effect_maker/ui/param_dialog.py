@@ -49,6 +49,8 @@ def _make_editor(param, value):
     if kind == "str":
         w = QtWidgets.QLineEdit()
         return w, w.text, w.setText
+    if kind == "file":
+        return _file_editor(param)
     if kind == "choice":
         w = QtWidgets.QComboBox()
         w.addItems(param.choices)
@@ -58,6 +60,32 @@ def _make_editor(param, value):
         w = ColorButton(value)
         return w, w.rgb, w.set_rgb
     raise ValueError(kind)
+
+
+IMAGE_FILTER = u"画像 (*.png *.tga *.tif *.tiff *.exr *.jpg *.jpeg);;すべてのファイル (*.*)"
+
+
+def _file_editor(param):
+    """パスの入力欄 + 「参照...」ボタン。"""
+    w = QtWidgets.QWidget()
+    edit = QtWidgets.QLineEdit()
+    edit.setPlaceholderText(u"空欄: ツールが作る既定の絵")
+    browse = QtWidgets.QPushButton(u"参照...")
+
+    def pick():
+        import os
+        start = os.path.dirname(edit.text()) if edit.text() else ""
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(w, param.label, start, IMAGE_FILTER)
+        if path:
+            edit.setText(path)
+
+    browse.clicked.connect(pick)
+    row = QtWidgets.QHBoxLayout(w)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.addWidget(edit, 1)
+    row.addWidget(browse)
+    w.line_edit = edit
+    return w, edit.text, edit.setText
 
 
 class ParamDialog(QtWidgets.QDialog):

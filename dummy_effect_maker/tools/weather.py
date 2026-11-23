@@ -345,6 +345,8 @@ def _dust_params(mesh):
     if mesh:
         base.append(Param("shade_color", u"影の色", (0.62, 0.52, 0.42), kind="color"))
     base.append(Param("opacity", u"不透明度", 1.0, minimum=0.0, maximum=1.0, step=0.1))
+    if not mesh:
+        base.append(wx.texture_param("puff", tiling=False))
     return base + _common_tail(0.5)
 
 
@@ -398,7 +400,7 @@ def build_dust(cmds, mu, root, v, mesh=False):
         pts, faces, uvs = wx.card_points()
         src = wx.make_mesh(cmds, prefix + "_puffSrc", src_grp, pts, faces, uvs)
         shader, sg, tex, _ = wx.texture_shader(cmds, mu, root, prefix + "_mat",
-                                               wx.texture_path(cmds, "puff"), owned,
+                                               wx.resolve_texture(cmds, v, "puff"), owned,
                                                opacity_attr="opacity")
     cmds.setAttr(src_grp + ".visibility", 0)
     cmds.sets(src, edit=True, forceElement=sg)
@@ -744,7 +746,8 @@ SNOW = wx.register(wx.Kind("snow", SnowTool, "dfx_snow#", u"雪 (粒)",
                            _live(SnowTool, ("count",)), ("count",), build=build_snow,
                            create=_create_area, need_camera=True))
 DUST = wx.register(wx.Kind("dust", DustTool, "dfx_dust#", u"土煙 (スプライト)",
-                           _live(DustTool, ("count",)), ("count",), build=build_dust,
+                           _live(DustTool, ("count", "texture")), ("count", "texture"),
+                           build=build_dust,
                            create=_create_emitter, need_camera=True))
 DUST_MESH = wx.register(wx.Kind("dust_mesh", DustMeshTool, "dfx_dustMesh#", u"土煙 (もこもこ)",
                                 _live(DustMeshTool, ("count",)), ("count",),

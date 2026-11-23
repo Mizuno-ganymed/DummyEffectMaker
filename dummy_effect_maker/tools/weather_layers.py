@@ -41,7 +41,8 @@ def _far_params(snow):
     return params + [
         Param("opacity_near", u"内側の不透明度", near, minimum=0.0, maximum=1.0, step=0.1),
         Param("opacity_far", u"外側の不透明度", far, minimum=0.0, maximum=1.0, step=0.1),
-        Param("color", u"色", color, kind="color")] + _common_tail()
+        Param("color", u"色", color, kind="color"),
+        wx.texture_param("snow" if snow else "rain", tiling=True)] + _common_tail()
 
 
 class RainFarTool(BaseTool):
@@ -86,6 +87,18 @@ def cylinder_layout(sides=48):
     return pts, faces, uvs, uv_ids
 
 
+def texture_aspect(path):
+    """テクスチャの 縦 / 横 (模様の高さ = 模様の大きさ × これ)。読めなければ 1。"""
+    try:
+        from ..ui.qt import QtGui
+        size = QtGui.QImageReader(path).size()
+        if size.width() > 0 and size.height() > 0:
+            return size.height() / float(size.width())
+    except Exception:
+        pass
+    return 1.0
+
+
 def far_repeat(radius, height, tile, aspect):
     """筒の UV の繰り返し (周りは整数にして継ぎ目を出さない)。aspect = テクスチャの縦 / 横。"""
     around = max(1, int(round(2 * math.pi * radius / max(tile, 1e-3))))
@@ -101,8 +114,8 @@ def build_far(cmds, mu, root, v, snow=False):
     owned.append(grp)
     # 筒はカメラの位置に付いて動く (回転はしない)
     cmds.connectAttr(tracks[wx.CAMERA_ATTR] + ".outputTranslate", grp + ".translate")
-    texture = wx.texture_path(cmds, "snow" if snow else "rain")
-    aspect = 1.0 if snow else 2.0
+    texture = wx.resolve_texture(cmds, v, "snow" if snow else "rain")
+    aspect = texture_aspect(texture)
     pts, faces, uvs, uv_ids = cylinder_layout()
     layers = int(v["layers"])
     items = []
@@ -164,7 +177,8 @@ def _card_params(count, width, height, size, squash, opacity, near, spin):
                      tooltip=u"カメラがこれより近づくと薄くなって消える (板の切れ目を見せない)"),
                Param("edge_fade", u"範囲の端で消える幅", 0.15, minimum=0.0, maximum=0.5, step=0.05,
                      tooltip=u"範囲の箱の端からこの割合の所で薄くなる (風で回り込む時に、ぱっと出ない)"),
-               Param("color", u"色", (0.88, 0.92, 1.0), kind="color")]
+               Param("color", u"色", (0.88, 0.92, 1.0), kind="color"),
+               wx.texture_param("fog_card", tiling=False)]
             + _common_tail())
 
 
@@ -203,7 +217,7 @@ def build_cards(cmds, mu, root, v):
     owned = []
     wx.track_links(cmds, mu, root, owned)
     count = int(v["count"])
-    texture = wx.texture_path(cmds, "fog_card")
+    texture = wx.resolve_texture(cmds, v, "fog_card")
     src_grp = cmds.group(empty=True, name=prefix + "_src", parent=root)
     owned.append(src_grp)
     pts, faces, uvs = wx.card_points()
@@ -350,7 +364,8 @@ class GroundFogTool(BaseTool):
                        tooltip=u"風が無くても模様が少しずつ動く速さ (板ごとに少し違う)"),
                  Param("edge", u"端のぼかし", 0.3, minimum=0.0, maximum=0.99, step=0.05,
                        tooltip=u"箱の端からこの割合の所から薄くなる"),
-                 Param("color", u"色", (0.9, 0.93, 1.0), kind="color")]
+                 Param("color", u"色", (0.9, 0.93, 1.0), kind="color"),
+                 wx.texture_param("fog_tile", tiling=True)]
               + _common_tail(0.6))
 
     def run(self, ctx, **v):
@@ -368,7 +383,7 @@ def build_ground_fog(cmds, mu, root, v):
     wx.track_links(cmds, mu, root, owned)
     area = wx.find_link(cmds, root, wx.AREA_ATTR)
     layers = int(v["layers"])
-    texture = wx.texture_path(cmds, "fog_tile")
+    texture = wx.resolve_texture(cmds, v, "fog_tile")
     pts = [(-0.5, 0.0, 0.5), (0.5, 0.0, 0.5), (0.5, 0.0, -0.5), (-0.5, 0.0, -0.5)]
     uvs = [(0, 0), (1, 0), (1, 1), (0, 1)]
     items = []
@@ -440,22 +455,24 @@ float $edge = clamp(0.0, 0.99, 1 - {r}.dfx_edge);
 
 # ---------------------------------------------------------------- 種類の登録
 RAIN_FAR = wx.register(wx.Kind("rain_far", RainFarTool, "dfx_rainFar#", u"雨 (遠景の筒)",
-                               _live(RainFarTool, ("layers",)), ("layers",),
+                               _live(RainFarTool, ("layers", "texture")), ("layers", "texture"),
                                build=lambda c, m, r, v: build_far(c, m, r, v, snow=False),
                                need_camera=True))
 SNOW_FAR = wx.register(wx.Kind("snow_far", SnowFarTool, "dfx_snowFar#", u"雪 (遠景の筒)",
-                               _live(SnowFarTool, ("layers",)), ("layers",),
+                               _live(SnowFarTool, ("layers", "texture")), ("layers", "texture"),
                                build=lambda c, m, r, v: build_far(c, m, r, v, snow=True),
                                need_camera=True))
 FOG = wx.register(wx.Kind("fog", FogTool, "dfx_fog#", u"霧 (霧の板)",
-                          _live(FogTool, ("count",)), ("count",), build=build_cards,
+                          _live(FogTool, ("count", "texture")), ("count", "texture"),
+                          build=build_cards,
                           create=_create_area, need_camera=True))
 FOG_DEPTH = wx.register(wx.Kind("fog_depth", FogDepthTool, "dfx_fogDepth#", u"霧 (遠景の重ね板)",
                                 _live(FogDepthTool, ("layers",)), ("layers",), build=build_fog_depth,
                                 need_camera=True, need_wind=False))
 GROUND_FOG = wx.register(wx.Kind("ground_fog", GroundFogTool, "dfx_groundFog#", u"地霧 (重ね板)",
-                                 _live(GroundFogTool, ("layers",)), ("layers",),
+                                 _live(GroundFogTool, ("layers", "texture")), ("layers", "texture"),
                                  build=build_ground_fog, create=_create_area))
 GROUND_CRAWL = wx.register(wx.Kind("ground_crawl", GroundCrawlTool, "dfx_groundCrawl#",
-                                   u"地霧 (這う霧)", _live(GroundCrawlTool, ("count",)), ("count",),
+                                   u"地霧 (這う霧)", _live(GroundCrawlTool, ("count", "texture")),
+                                   ("count", "texture"),
                                    build=build_cards, create=_create_area, need_camera=True))

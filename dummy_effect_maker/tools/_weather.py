@@ -574,6 +574,31 @@ def texture_path(cmds, name):
     return path
 
 
+TEXTURE_PARAM = "texture"
+
+
+def texture_param(default_name, tiling):
+    """「テクスチャのファイル」のパラメータ (空欄ならツールが作る既定の絵)。"""
+    from ..core import Param
+    tip = (u"貼る絵のファイル (透明度付きの PNG など)。空欄ならツールが作る既定の絵 "
+           u"(sourceimages/dfx_weather/dfx_%s_v%d.png)。\n"
+           u"白っぽく描くと「色」で色を付けられる。" % (default_name, TEXTURE_VERSION))
+    if tiling:
+        tip += u"\nこの絵は繰り返して貼るので、上下 (と左右) の端がつながる絵にする"
+    return Param(TEXTURE_PARAM, u"テクスチャのファイル", u"", kind="file", tooltip=tip)
+
+
+def resolve_texture(cmds, v, default_name):
+    """パラメータで指定したテクスチャ (無ければ既定の絵を作って) のパス。"""
+    path = (v.get(TEXTURE_PARAM) or u"").strip()
+    if not path:
+        return texture_path(cmds, default_name)
+    path = path.replace("\\", "/")
+    if not os.path.isfile(path):
+        raise ToolError(u"テクスチャのファイルが見つかりません: %s" % path)
+    return path
+
+
 def _image(w, h):
     from ..ui.qt import QtGui
     img = QtGui.QImage(w, h, QtGui.QImage.Format_ARGB32)

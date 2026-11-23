@@ -101,11 +101,11 @@ def add_param_attrs(node, params, values, live_names):
 
         if p.kind == "choice":
             cmds.setAttr(plug, p.choices.index(value))
-        elif p.kind == "str":
+        elif p.kind in ("str", "file"):
             cmds.setAttr(plug, value, type="string")
         else:
             cmds.setAttr(plug, value)
-        if p.kind != "str":
+        if p.kind not in ("str", "file"):
             _show_in_channel_box(plug, live)
 
 
@@ -131,7 +131,7 @@ def read_param_values(node, params):
             value = cmds.getAttr(plug)[0]
         elif p.kind == "choice":
             value = cmds.getAttr(plug, asString=True)
-        elif p.kind == "str":
+        elif p.kind in ("str", "file"):
             value = cmds.getAttr(plug) or ""
         else:
             value = cmds.getAttr(plug)
@@ -155,7 +155,7 @@ def write_param_values(node, params, values, skip=()):
             cmds.setAttr(plug, *value, type="float3")
         elif p.kind == "choice":
             cmds.setAttr(plug, p.choices.index(value))
-        elif p.kind == "str":
+        elif p.kind in ("str", "file"):
             cmds.setAttr(plug, value, type="string")
         else:
             cmds.setAttr(plug, value)
