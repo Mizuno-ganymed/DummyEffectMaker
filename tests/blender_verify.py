@@ -1202,6 +1202,67 @@ def b18_cloth():
     check("波打つ布: 全削除で格子も消える", not [l for l in bpy.data.lattices if l.get(rt.TAG_KEY)])
 
 
+# ---------------------------------------------------------------- スピードライン (トンネル)
+@section
+def b19_tunnel_lines():
+    from dummy_effect_maker.blender.tools import _wx, tunnel_lines as bt
+    from dummy_effect_maker.tools import tunnel_lines as mt
+    from dummy_effect_maker import motion as mo
+    new_scene()
+    cam = scene_camera(loc=(0, -10, 2), rot=(math.radians(90), 0, math.radians(20)))
+    cam.keyframe_insert("location", frame=1)
+    cam.location = (8, 30, 2)
+    cam.keyframe_insert("location", frame=60)
+    select(cam)
+    op(bt.TunnelLinesTool, count=12)
+    root = bpy.data.objects.get("dfx_tunnel1")
+    vanish = rt.control(root, "vanish")
+    obj = _wx.part(root, "_items")
+    check("トンネル: 消失点の Empty はカメラに付く・線 12 本が 1 つのメッシュ", root is not None
+          and vanish.constraints[0].type == "CHILD_OF" and vanish.constraints[0].target == cam
+          and obj.data["dfx_count"] == 12)
+    vanish.location = (3.0, 1.5, -20.0)
+    v = rt.read_params(root, mt.KIND.stored_params())
+    bad = []
+    for f in (1, 6, 17, 40):
+        bpy.context.scene.frame_set(f)
+        bpy.context.view_layer.update()
+        cm, van = bt.camera_space(root)
+        if not near(van, (3.0, 1.5, -20.0), 1e-4):
+            bad.append(("vanish", f, van))
+        # 期待値: トンネルの空間 → カメラの空間 → ワールド (Maya 版と同じ式)
+        bx, by, bz = mo.tunnel_basis((3.0, 1.5, -20.0))
+        tmpl = list(obj.data["dfx_template"])
+        nt = len(tmpl) // 3
+        for i in range(12):
+            p, axes, s = mo.tunnel_item(i, f, v, True)
+            for k in range(nt):
+                t = tmpl[3 * k:3 * k + 3]
+                loc = [p[c] + sum(axes[a][c] * s[a] * t[a] for a in range(3)) for c in range(3)]
+                cam_sp = Vector([sum((bx, by, bz)[a][c] * loc[a] for a in range(3)) for c in range(3)])
+                want = cm @ cam_sp
+                got = obj.matrix_world @ obj.data.vertices[i * nt + k].co
+                if (got - want).length > 1e-3:
+                    bad.append((f, i, k))
+                    break
+    check("トンネル: 線の頂点が Maya 版と同じ計算 (動くカメラ・動かした消失点)", not bad, str(bad[:3]))
+    # 消失点の向き: 奥に行くほど、画面の上で消失点の方へ集まる
+    bpy.context.scene.frame_set(20)
+    cm, van = bt.camera_space(root)
+    vdir = Vector(van).normalized()
+    far = [cm.inverted() @ (obj.matrix_world @ obj.data.vertices[i * 4 + 2].co) for i in range(12)]
+    far = [p for p in far if p.length > 1e-6 and -p.z > 15]
+    check("トンネル: 奥の線は消失点の向きに集まる", far and all(p.normalized().dot(vdir) > 0.9 for p in far),
+          str([round(p.normalized().dot(vdir), 3) for p in far][:5]))
+    root["dfx_shape"] = mt.SHAPE_STAR
+    root["dfx_count"] = 20
+    select(root)
+    op(bscene.UpdateEffectsTool)
+    obj = _wx.part(root, "_items")
+    check("トンネル: 星にして更新 (20 個・消失点はそのまま)", obj.data["dfx_count"] == 20 and not obj.data["dfx_line"]
+          and len(obj.data.polygons) == 20 * 10 and near(rt.control(root, "vanish").location, (3.0, 1.5, -20.0)))
+
+
 @section
 def b05_delete_all():
     op(bscene.DeleteAllTool)
@@ -1215,7 +1276,7 @@ for fn in (b01_register, b02_vulcan, b03_shockwave, b04_export, b05_delete_all, 
            b07_rain_snow, b08_dust_sparks, b09_homing_energy, b10_explosion,
            b11_shakes, b12_export_more, b13_nuke, b14_lightning,
            b15_explosion_single, b16_discharge, b17_wisp,
-           b18_cloth):
+           b18_cloth, b19_tunnel_lines):
     fn()
 fails = [r for r in RESULTS if not r[1]]
 print("\nSUMMARY: %d passed, %d failed" % (len(RESULTS) - len(fails), len(fails)))

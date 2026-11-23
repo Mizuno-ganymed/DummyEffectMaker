@@ -165,7 +165,7 @@ def test_tools_are_grouped_into_tabs():
     assert dict(tabs)[u"カメラ"] == [
         u"集中線", u"集中線を更新", u"集中線のパラメータを保存", u"集中線のパラメータを読み込み",
         u"スピードライン", u"スピードラインを更新", u"スピードラインのパラメータを保存",
-        u"スピードラインのパラメータを読み込み",
+        u"スピードラインのパラメータを読み込み", u"スピードライン (トンネル)", u"スピードライン (トンネル) を更新",
         u"画ぶれ", u"画ぶれを更新", u"画ぶれのパラメータを保存", u"画ぶれのパラメータを読み込み",
         u"画ぶれを外す",
         u"手ブレ", u"手ブレを更新", u"手ブレのパラメータを保存", u"手ブレのパラメータを読み込み",
@@ -812,7 +812,8 @@ def test_ghost_blur_smear_points():
 
 
 def test_weather_params_are_live_rebuild_or_create():
-    assert len(wx.KINDS) == 21   # 天候 18 (稲妻・放電 各 2 つ・細い煙を含む) + 核爆発・爆発 (単体)・波打つ布 (同じ仕組み)
+    assert len(wx.KINDS) == 22   # (+ スピードライン (トンネル))
+    # 天候 18 (稲妻・放電 各 2 つ・細い煙を含む) + 核爆発・爆発 (単体)・波打つ布 (同じ仕組み)
     for kind in wx.KINDS.values():
         names = set(p.name for p in kind.tool.params)
         stored = set(kind.live) | set(kind.rebuild)
@@ -1262,3 +1263,33 @@ def test_speed_lines_reach_clamps_tilted_region():
     flat = speed_lines.plane_region(16 / 9.0, zc, (0, 0, 0, 0, 0))
     assert speed_lines.plane_region(16 / 9.0, zc, (0, 0, 0, 0, 0), 4.0) == flat        # 傾けなければ変わらない
     assert "reach" in speed_lines.LIVE_PARAMS
+
+
+def test_tunnel_lines_flow_toward_vanishing_point():
+    from dummy_effect_maker import motion as mo
+    from dummy_effect_maker.tools import tunnel_lines as tl
+    v = tl.TunnelLinesTool.default_values()
+    # トンネルの軸: -Z が消失点の向き、Y はなるべく上、直交
+    x, y, z = mo.tunnel_basis((3.0, 1.5, -20.0))
+    d = mo.unit((3.0, 1.5, -20.0))
+    assert _close3(mo.mul(z, -1.0), d, 1e-9) and abs(mo.dot(x, y)) < 1e-9 and abs(x[1]) < 1e-9 and y[1] > 0.9
+    # 壁の上 (半径のばらつき 0 なら軸からちょうど半径)、手前の端〜完全に消える距離の間
+    flat = dict(v, radius_random=0.0)
+    for i in range(20):
+        p, axes, s3 = mo.tunnel_item(i, 13, flat, True)
+        assert abs((p[0] ** 2 + p[1] ** 2) ** 0.5 - v["radius"]) < 1e-9
+        assert v["near"] - 1e-9 <= -p[2] <= v["fade_end"] + 1e-9
+        assert abs(mo.dot(axes[2], (p[0], p[1], 0.0))) > 0 and mo.dot(axes[2], (p[0], p[1], 0.0)) < 0   # 内側を向く
+    # 奥へ / 手前へ
+    a0 = -mo.tunnel_item(0, 10, v, True)[0][2]
+    a1 = -mo.tunnel_item(0, 10.2, v, True)[0][2]
+    t = dict(v, direction=mo.TUNNEL_TOWARD)
+    b0 = -mo.tunnel_item(0, 10, t, True)[0][2]
+    b1 = -mo.tunnel_item(0, 10.2, t, True)[0][2]
+    assert a1 > a0 and b1 < b0
+    # 完全に消える距離の近くは小さい (形)
+    sizes = [(-mo.tunnel_item(i, 7, v, False)[0][2], mo.tunnel_item(i, 7, v, False)[2][0]) for i in range(60)]
+    assert all(s3 == 0 or dd < v["fade_end"] for dd, s3 in sizes)
+    for shape, faces in ((tl.SHAPE_LINE, 1), (tl.SHAPE_STAR, 10), (tl.SHAPE_HEART, 24), (tl.SHAPE_DIAMOND, 4)):
+        assert len(tl.shape_points(shape)[1]) == faces
+    assert set(tl.KIND.rebuild) == set(("shape", "count")) and "direction" in tl.KIND.live

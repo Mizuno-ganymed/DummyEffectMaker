@@ -838,3 +838,55 @@ def cloth_color(layer, layers, v):
     """手前 (0) → 奥の布の色。"""
     t = layer / float(max(layers - 1, 1))
     return tuple(a + (b - a) * t for a, b in zip(v["color_front"], v["color_back"]))
+
+
+
+# ---------------------------------------------------------------- スピードライン (トンネル)
+# カメラの空間 (X 右・Y 上・-Z 前。Maya も Blender も同じ) で考える。カメラはトンネル (円柱) の軸の上にいて、
+# トンネルの軸は消失点 (カメラの空間の点) の方へ伸びる。トンネルの空間は、ローカル -Z が消失点の向き、
+# Y がなるべく上 (aimConstraint (aim -Z, up Y) と同じ)。線・形はトンネルの内側の壁に並んで、軸に沿って流れる。
+TUNNEL_AWAY = u"奥へ"
+TUNNEL_TOWARD = u"手前へ"
+
+
+def tunnel_basis(vanish):
+    """トンネルの空間の軸 (X, Y, Z) (カメラの空間で)。"""
+    n = mag(vanish)
+    z = mul(vanish, -1.0 / n) if n > 1e-9 else (0.0, 0.0, 1.0)
+    x = cross((0.0, 1.0, 0.0), z)
+    x = unit(x) if mag(x) > 1e-6 else (1.0, 0.0, 0.0)
+    return x, cross(z, x), z
+
+
+def tunnel_item(i, frame, v, line):
+    """線・形 i の (トンネルの空間の位置, 軸 (X, Y, Z), 大きさ (x, y, z))。消えている時は大きさ 0。
+
+    奥へ: カメラの近く (手前の端) から出て、完全に消える距離まで遠ざかる。手前へ: その逆。
+    消え始める距離 → 完全に消える距離 で小さくなり、カメラのすぐ前 (手前の端 + 手前で消える距離) でも小さくなる。
+    """
+    sd = v["seed"]
+    near, far = v["near"], max(v["fade_end"], v["near"] + 0.01)
+    span = far - near
+    n = v["speed"] * frame / span + h(i, 0, 71, sd)
+    c = math.floor(n)
+    q = n - c
+    away = v["direction"] != TUNNEL_TOWARD
+    depth = near + q * span if away else far - q * span
+    th = TAU * h(i, c, 72, sd)
+    r = v["radius"] * (1 + (h(i, c, 73, sd) - 0.5) * 2 * v["radius_random"])
+    fade = clamp(0, 1, (far - depth) / max(far - v["fade_start"], 1e-3))         * clamp(0, 1, (depth - near) / max(v["near_fade"], 1e-3))
+    ct, st = math.cos(th), math.sin(th)
+    p = (r * ct, r * st, -depth)
+    inward = (-ct, -st, 0.0)
+    if line:
+        y = (0.0, 0.0, -1.0) if away else (0.0, 0.0, 1.0)      # 流れる向きに伸びる
+        x = cross(y, inward)
+        return p, (x, y, inward), (v["width"] * fade, v["length"] * fade, 1.0)
+    # 形: 壁に貼り付き (上 = 奥の向き)、回る
+    y0 = (0.0, 0.0, -1.0)
+    x0 = cross(y0, inward)
+    a = math.radians(v["spin"] * frame + 360.0 * h(i, c, 75, sd) * v["spin_random"])
+    x = add(mul(x0, math.cos(a)), mul(y0, math.sin(a)))
+    y = sub(mul(y0, math.cos(a)), mul(x0, math.sin(a)))
+    sz = v["size"] * (1 + (h(i, c, 74, sd) - 0.5) * 2 * v["size_random"]) * fade
+    return p, (x, y, inward), (sz, sz, sz)

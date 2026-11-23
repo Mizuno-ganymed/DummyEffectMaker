@@ -12,6 +12,7 @@ UPDATE_TOOLS = {
     "camera_shake": "CameraShakeUpdateTool", "hand_shake": "HandShakeUpdateTool",
     "shockwave": "ShockwaveUpdateTool", "explosion": "ExplosionUpdateTool", "explosion_single": "ExplosionUpdateTool", "nuke": "NukeUpdateTool",
     "wind": "WindUpdateTool", "cloth_waves": "ClothUpdateTool",
+    "tunnel_lines": "TunnelLinesUpdateTool",
 }
 GHOST_UPDATE = "GhostBlurUpdateTool"
 WEATHER_UPDATE = "WeatherUpdateTool"
