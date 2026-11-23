@@ -858,30 +858,60 @@ def tunnel_basis(vanish):
     return x, cross(z, x), z
 
 
+def tunnel_width_at(t, v):
+    """線の長さ方向の位置 t (0 = 入り (後ろの端)、1 = 終わり (先頭)) での太さ (半分)。
+
+    スピードラインと同じ、入り・中・終わりの 3 つを通る 2 次曲線 (0 未満は 0)。
+    """
+    return max(0.0, v["width_start"] * 2.0 * (t - 0.5) * (t - 1.0) - v["width_mid"] * 4.0 * t * (t - 1.0)
+               + v["width_end"] * 2.0 * t * (t - 0.5))
+
+
+def tunnel_roll(frame, v):
+    """トンネルの回転 (ラジアン): 回転 (度) + 回転の速さ (度 / フレーム) × フレーム。"""
+    return math.radians(v["roll"] + v["roll_speed"] * frame)
+
+
 def tunnel_item(i, frame, v, line):
     """線・形 i の (トンネルの空間の位置, 軸 (X, Y, Z), 大きさ (x, y, z))。消えている時は大きさ 0。
 
     奥へ: カメラの近く (手前の端) から出て、完全に消える距離まで遠ざかる。手前へ: その逆。
     消え始める距離 → 完全に消える距離 で小さくなり、カメラのすぐ前 (手前の端 + 手前で消える距離) でも小さくなる。
+    トンネルが回る (回転の速さ) と、線・形は軸の周りを回りながら流れる (らせん = 弧を描いて飛んでくる)。
+    線は、その通り道の少し前 (尻尾) から今の位置 (先頭) までを結ぶ向きに伸びる。
     """
     sd = v["seed"]
     near, far = v["near"], max(v["fade_end"], v["near"] + 0.01)
     span = far - near
-    n = v["speed"] * frame / span + h(i, 0, 71, sd)
+    speed = v["speed"] * (1 - v["speed_random"] * h(i, 0, 78, sd))   # 線・形ごとの速さ (ずっと同じ)
+    n = speed * frame / span + h(i, 0, 71, sd)
     c = math.floor(n)
     q = n - c
     away = v["direction"] != TUNNEL_TOWARD
     depth = near + q * span if away else far - q * span
-    th = TAU * h(i, c, 72, sd)
+    th = TAU * h(i, c, 72, sd) + tunnel_roll(frame, v)
     r = v["radius"] * (1 + (h(i, c, 73, sd) - 0.5) * 2 * v["radius_random"])
-    fade = clamp(0, 1, (far - depth) / max(far - v["fade_start"], 1e-3))         * clamp(0, 1, (depth - near) / max(v["near_fade"], 1e-3))
+    fade = (clamp(0, 1, (far - depth) / max(far - v["fade_start"], 1e-3))
+            * clamp(0, 1, (depth - near) / max(v["near_fade"], 1e-3)))
     ct, st = math.cos(th), math.sin(th)
     p = (r * ct, r * st, -depth)
     inward = (-ct, -st, 0.0)
     if line:
-        y = (0.0, 0.0, -1.0) if away else (0.0, 0.0, 1.0)      # 流れる向きに伸びる
+        # 尻尾: 通り道 (らせん) を長さ L だけ戻った所。a = 流れる向きと軸の間の角
+        length = v["length"] * (1 - v["length_random"] * h(i, c, 77, sd))
+        a = math.atan2(r * math.radians(v["roll_speed"]), speed)
+        dth = length * math.sin(a) / max(r, 1e-6)
+        dz = length * math.cos(a)
+        tail_depth = depth - dz if away else depth + dz
+        d = sub(p, (r * math.cos(th - dth), r * math.sin(th - dth), -tail_depth))
+        chord = mag(d)
+        y = mul(d, 1.0 / chord) if chord > 1e-9 else ((0.0, 0.0, -1.0) if away else (0.0, 0.0, 1.0))
         x = cross(y, inward)
-        return p, (x, y, inward), (v["width"] * fade, v["length"] * fade, 1.0)
+        if mag(x) < 1e-6:
+            x = cross(y, (0.0, 0.0, 1.0))
+        x = unit(x)
+        thick = 1 - v["thickness_random"] * h(i, c, 76, sd)
+        return p, (x, y, cross(x, y)), (thick * fade, chord * fade, 1.0)
     # 形: 壁に貼り付き (上 = 奥の向き)、回る
     y0 = (0.0, 0.0, -1.0)
     x0 = cross(y0, inward)

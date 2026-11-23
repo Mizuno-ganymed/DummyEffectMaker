@@ -1222,6 +1222,9 @@ def b19_tunnel_lines():
           and vanish.constraints[0].type == "CHILD_OF" and vanish.constraints[0].target == cam
           and obj.data["dfx_count"] == 12)
     vanish.location = (3.0, 1.5, -20.0)
+    root["dfx_roll_speed"] = 4.0      # トンネルが回る (らせん)
+    root["dfx_roll"] = 30.0
+    root["dfx_width_start"] = 0.02
     v = rt.read_params(root, mt.KIND.stored_params())
     bad = []
     for f in (1, 6, 17, 40):
@@ -1238,6 +1241,7 @@ def b19_tunnel_lines():
             p, axes, s = mo.tunnel_item(i, f, v, True)
             for k in range(nt):
                 t = tmpl[3 * k:3 * k + 3]
+                t = (t[0] * mo.tunnel_width_at(t[1] + 1.0, v), t[1], t[2])   # 線の太さ (入り・中・終わり)
                 loc = [p[c] + sum(axes[a][c] * s[a] * t[a] for a in range(3)) for c in range(3)]
                 cam_sp = Vector([sum((bx, by, bz)[a][c] * loc[a] for a in range(3)) for c in range(3)])
                 want = cm @ cam_sp
@@ -1245,12 +1249,15 @@ def b19_tunnel_lines():
                 if (got - want).length > 1e-3:
                     bad.append((f, i, k))
                     break
-    check("トンネル: 線の頂点が Maya 版と同じ計算 (動くカメラ・動かした消失点)", not bad, str(bad[:3]))
+    check("トンネル: 線の頂点が Maya 版と同じ計算 (動くカメラ・動かした消失点・回転・太さ)", not bad, str(bad[:3]))
+    root["dfx_roll_speed"] = 0.0
+    root["dfx_roll"] = 0.0
     # 消失点の向き: 奥に行くほど、画面の上で消失点の方へ集まる
     bpy.context.scene.frame_set(20)
     cm, van = bt.camera_space(root)
     vdir = Vector(van).normalized()
-    far = [cm.inverted() @ (obj.matrix_world @ obj.data.vertices[i * 4 + 2].co) for i in range(12)]
+    nt = len(obj.data["dfx_template"]) // 3
+    far = [cm.inverted() @ (obj.matrix_world @ obj.data.vertices[i * nt + nt // 2 - 1].co) for i in range(12)]
     far = [p for p in far if p.length > 1e-6 and -p.z > 15]
     check("トンネル: 奥の線は消失点の向きに集まる", far and all(p.normalized().dot(vdir) > 0.9 for p in far),
           str([round(p.normalized().dot(vdir), 3) for p in far][:5]))

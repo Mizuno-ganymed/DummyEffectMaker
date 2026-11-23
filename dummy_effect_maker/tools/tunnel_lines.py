@@ -12,6 +12,9 @@
           dfx_tunnelN_items  線・形 (毎フレーム、トンネルの空間で置き直す)
 
 線・形は「手前の端」と「完全に消える距離」の間を流れ、1 周するごとに壁の上の位置が変わる。
+トンネルは軸の周りに回せる (回転 / 回転の速さ)。回り続けると、線・形はらせん (弧) を描いて流れ、
+線はその通り道に沿って伸びる。線の太さはスピードラインと同じく、入り・中・終わりの 3 つで決める
+(元メッシュの頂点をエクスプレッションで動かす。全部の線に効く)。
 「消え始める距離」→「完全に消える距離」で小さくなって消え、カメラのすぐ前 (手前で消える距離) でも小さくなる。
 計算は motion.tunnel_item と同じ式 (Blender 版も同じ関数を使う)。
 """
@@ -32,14 +35,23 @@ SHAPE_HEART = u"ハート"
 SHAPE_DIAMOND = u"菱形"
 SHAPES = [SHAPE_LINE, SHAPE_STAR, SHAPE_HEART, SHAPE_DIAMOND]
 REBUILD = ("shape", "count")
+# 線の元メッシュの、長さ方向の頂点数 (多いほど太さの変化がなめらか)
+WIDTH_SAMPLES = 11
 H = wx.mel_hash
 
 
 # ---------------------------------------------------------------- 形 (Blender 版も使う。XY 面、Z を向く)
 def shape_points(shape):
-    """(頂点, 面)。線は幅 1・長さ 1 (Y = -1〜0。先頭が 0)、ほかは大きさ約 1 (中心が 0)。"""
+    """(頂点, 面)。線は長さ 1 (Y = -1〜0。尻尾が -1、先頭が 0)、ほかは大きさ約 1 (中心が 0)。
+
+    線の頂点は、左側 (X = -1) と右側 (X = 1) を WIDTH_SAMPLES 個ずつ (尻尾 → 先頭)。X は左右の目印で、
+    本当の X は ±motion.tunnel_width_at (Maya は頂点のエクスプレッション、Blender は毎フレーム置き直す)。
+    """
     if shape == SHAPE_LINE:
-        return [(-0.5, -1.0, 0.0), (0.5, -1.0, 0.0), (0.5, 0.0, 0.0), (-0.5, 0.0, 0.0)], [[0, 1, 2, 3]]
+        n = WIDTH_SAMPLES
+        ys = [-1.0 + j / float(n - 1) for j in range(n)]
+        pts = [(-1.0, y, 0.0) for y in ys] + [(1.0, y, 0.0) for y in ys]
+        return pts, [[j, n + j, n + j + 1, j + 1] for j in range(n - 1)]
     if shape == SHAPE_STAR:
         rim = []
         for k in range(10):
@@ -68,6 +80,13 @@ def _params():
         Param("direction", u"流れる向き", mo.TUNNEL_AWAY, kind="choice", choices=[mo.TUNNEL_AWAY, mo.TUNNEL_TOWARD],
               tooltip=u"奥へ: カメラの近くから消失点へ遠ざかる / 手前へ: 消失点の方から近づいてくる"),
         Param("speed", u"速さ", 0.8, minimum=0.0, step=0.1, tooltip=u"1 フレームに進む距離"),
+        Param("speed_random", u"速さのばらつき", 0.3, minimum=0.0, maximum=1.0, step=0.1,
+              tooltip=u"0 で全部同じ速さ。1 で 0 〜「速さ」までばらつく (線・形ごとに決まり、ずっと同じ)"),
+        Param("roll", u"トンネルの回転 (度)", 0.0, step=5.0, decimals=1,
+              tooltip=u"トンネルを軸の周りに回す角度 (キーを打つと、その動きで回る)"),
+        Param("roll_speed", u"回転の速さ (度 / フレーム)", 0.0, step=0.5, decimals=2,
+              tooltip=u"トンネルが回り続ける速さ。0 以外にすると、線・形が弧を描いて (らせんで) 流れる\n"
+                      u"(マイナスで逆回り)"),
         Param("radius", u"トンネルの半径", 3.0, minimum=0.01, step=0.5),
         Param("radius_random", u"半径のばらつき", 0.3, minimum=0.0, maximum=0.95, step=0.1,
               tooltip=u"壁からの浮き沈み (0 できれいな円柱の上)"),
@@ -79,7 +98,16 @@ def _params():
         Param("fade_end", u"完全に消える距離", 40.0, minimum=0.1, step=5.0,
               tooltip=u"この距離で完全に消える (トンネルの奥の端)"),
         Param("length", u"線の長さ", 3.0, minimum=0.0, step=0.5),
-        Param("width", u"線の太さ", 0.05, minimum=0.0, step=0.01, decimals=3),
+        Param("length_random", u"長さのばらつき", 0.5, minimum=0.0, maximum=1.0, step=0.1,
+              tooltip=u"0 で全部同じ長さ。1 で 0 〜「線の長さ」までばらつく (1 周するたびに変わる)"),
+        Param("width_start", u"線の入りの太さ", 0.0, minimum=0.0, step=0.005, decimals=4,
+              tooltip=u"線の後ろの端 (流れてくる側と反対) の太さ"),
+        Param("width_mid", u"線の中の太さ", 0.03, minimum=0.0, step=0.005, decimals=4,
+              tooltip=u"線の真ん中の太さ"),
+        Param("width_end", u"線の終わりの太さ", 0.005, minimum=0.0, step=0.005, decimals=4,
+              tooltip=u"線の先頭の端 (進んでいく側) の太さ"),
+        Param("thickness_random", u"太さのばらつき", 0.5, minimum=0.0, maximum=1.0, step=0.1,
+              tooltip=u"0 で全部同じ太さ。1 で 0 〜 決めた太さまでばらつく (1 周するたびに変わる)"),
         Param("size", u"形の大きさ", 0.5, minimum=0.0, step=0.1),
         Param("size_random", u"大きさのばらつき", 0.4, minimum=0.0, maximum=0.95, step=0.1),
         Param("spin", u"形の回転 (度 / フレーム)", 0.0, step=1.0, decimals=1),
@@ -99,6 +127,7 @@ class TunnelLinesTool(BaseTool):
     tooltip = (u"カメラがトンネルの中にいるような、消失点が画面の中にあるスピードラインを作ります。\n"
                u"カメラを選んで押してください (未選択ならシーンのカメラ)。\n"
                u"消失点のロケータ (_vanish) を X / Y に動かすと、消失点が画面の中で動きます。\n"
+               u"「回転の速さ」を 0 以外にすると、トンネルが回って線が弧を描いて飛んできます。\n"
                u"線のほかに、星・ハート・菱形も流せます。")
     params = _params()
 
@@ -147,29 +176,44 @@ def _item_body(r, line):
     code = u"""float $nr = {r}.dfx_near;
 float $fr = max({r}.dfx_fade_end, $nr + 0.01);
 float $span = $fr - $nr;
-float $n = {r}.dfx_speed * frame / $span + {h71};
+float $spd = {r}.dfx_speed * (1 - {r}.dfx_speed_random * {h78});
+float $n = $spd * frame / $span + {h71};
 float $c = floor($n);
 float $q = $n - $c;
 int $away = ({r}.dfx_direction == 0);
 float $depth = $fr - $q * $span;
 if ($away) $depth = $nr + $q * $span;
-float $th = 6.2831853 * {h72};
+float $th = 6.2831853 * {h72} + deg_to_rad({r}.dfx_roll + {r}.dfx_roll_speed * frame);
 float $rr = {r}.dfx_radius * (1 + ({h73} - 0.5) * 2 * {r}.dfx_radius_random);
 float $fade = clamp(0, 1, ($fr - $depth) / max($fr - {r}.dfx_fade_start, 1e-3))
             * clamp(0, 1, ($depth - $nr) / max({r}.dfx_near_fade, 1e-3));
 float $ct = cos($th); float $st = sin($th);
 vector $p = <<$rr * $ct, $rr * $st, -$depth>>;
-vector $Z = <<-$ct, -$st, 0>>;
+vector $Zi = <<-$ct, -$st, 0>>;
 int $vis = ($fade > 0);
-""".format(r=r, h71=H("$i", 0, 71), h72=H("$i", "$c", 72), h73=H("$i", "$c", 73))
+""".format(r=r, h71=H("$i", 0, 71), h72=H("$i", "$c", 72), h73=H("$i", "$c", 73), h78=H("$i", 0, 78))
     if line:
-        code += u"""vector $Y = <<0, 0, 1>>;
+        code += u"""float $L = {r}.dfx_length * (1 - {r}.dfx_length_random * {h77});
+float $a = atan2($rr * deg_to_rad({r}.dfx_roll_speed), $spd);
+float $dth = $L * sin($a) / max($rr, 1e-6);
+float $dz = $L * cos($a);
+float $td = $depth + $dz;
+if ($away) $td = $depth - $dz;
+vector $d = $p - <<$rr * cos($th - $dth), $rr * sin($th - $dth), -$td>>;
+float $ch = mag($d);
+vector $Y = <<0, 0, 1>>;
 if ($away) $Y = <<0, 0, -1>>;
-vector $X = cross($Y, $Z);
-vector $S = <<{r}.dfx_width * $fade, {r}.dfx_length * $fade, 1>>;
-""".format(r=r)
+if ($ch > 1e-9) $Y = $d * (1.0 / $ch);
+vector $X = cross($Y, $Zi);
+if (mag($X) < 1e-6) $X = cross($Y, <<0, 0, 1>>);
+$X = unit($X);
+vector $Z = cross($X, $Y);
+float $tk = 1 - {r}.dfx_thickness_random * {h76};
+vector $S = <<$tk * $fade, $ch * $fade, 1>>;
+""".format(r=r, h76=H("$i", "$c", 76), h77=H("$i", "$c", 77))
     else:
-        code += u"""vector $Y0 = <<0, 0, -1>>;
+        code += u"""vector $Z = $Zi;
+vector $Y0 = <<0, 0, -1>>;
 vector $X0 = cross($Y0, $Z);
 float $a = deg_to_rad({r}.dfx_spin * frame + 360.0 * {h75} * {r}.dfx_spin_random);
 vector $X = $X0 * cos($a) + $Y0 * sin($a);
@@ -178,6 +222,22 @@ float $sz = {r}.dfx_size * (1 + ({h74} - 0.5) * 2 * {r}.dfx_size_random) * $fade
 vector $S = <<$sz, $sz, $sz>>;
 """.format(r=r, h74=H("$i", "$c", 74), h75=H("$i", "$c", 75))
     return code
+
+
+def _width_expression(r, shape):
+    """線の元メッシュの頂点に太さを付ける (motion.tunnel_width_at と同じ式。左右の目印 X = ±1 からずらす)。"""
+    n = WIDTH_SAMPLES
+    out = [u"float $ws = {r}.dfx_width_start;".format(r=r),
+           u"float $wm = {r}.dfx_width_mid;".format(r=r),
+           u"float $we = {r}.dfx_width_end;".format(r=r),
+           u"float $t; float $w;"]
+    for j in range(n):
+        out.append(u"$t = %r;" % (j / float(n - 1)))
+        out.append(u"$w = max(0, $ws * 2 * ($t - 0.5) * ($t - 1) - $wm * 4 * $t * ($t - 1)"
+                   u" + $we * 2 * $t * ($t - 0.5));")
+        out.append(u"%s.pnts[%d].pntx = 1 - $w;" % (shape, j))
+        out.append(u"%s.pnts[%d].pntx = $w - 1;" % (shape, n + j))
+    return u"\n".join(out) + u"\n"
 
 
 def build(cmds, mu, root, v):
@@ -202,6 +262,10 @@ def build(cmds, mu, root, v):
     cmds.setAttr(src_grp + ".visibility", 0)
     _, sg = wx.flat_shader(cmds, mu, root, prefix + "_mat", owned, color_attr="color", opacity_attr="opacity")
     cmds.sets(src, edit=True, forceElement=sg)
+    if line:
+        src_shape = wx.short(cmds.listRelatives(src, shapes=True, fullPath=True)[0])
+        owned.append(cmds.expression(name=prefix + "_lineWidth", alwaysEvaluate=True, unitConversion="all",
+                                     string=_width_expression(prefix, src_shape)))
     count = int(v["count"])
     grp = cmds.ls(cmds.group(empty=True, name=prefix + "_items", parent=tunnel), long=True)[0]
     owned.append(grp)

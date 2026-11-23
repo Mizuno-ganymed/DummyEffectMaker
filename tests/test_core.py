@@ -1290,6 +1290,53 @@ def test_tunnel_lines_flow_toward_vanishing_point():
     # 完全に消える距離の近くは小さい (形)
     sizes = [(-mo.tunnel_item(i, 7, v, False)[0][2], mo.tunnel_item(i, 7, v, False)[2][0]) for i in range(60)]
     assert all(s3 == 0 or dd < v["fade_end"] for dd, s3 in sizes)
-    for shape, faces in ((tl.SHAPE_LINE, 1), (tl.SHAPE_STAR, 10), (tl.SHAPE_HEART, 24), (tl.SHAPE_DIAMOND, 4)):
+    for shape, faces in ((tl.SHAPE_LINE, tl.WIDTH_SAMPLES - 1), (tl.SHAPE_STAR, 10), (tl.SHAPE_HEART, 24),
+                         (tl.SHAPE_DIAMOND, 4)):
         assert len(tl.shape_points(shape)[1]) == faces
     assert set(tl.KIND.rebuild) == set(("shape", "count")) and "direction" in tl.KIND.live
+    for name in ("roll", "roll_speed", "speed_random", "width_start", "width_mid", "width_end", "thickness_random", "length_random"):
+        assert name in tl.KIND.live
+
+
+def test_tunnel_lines_roll_and_width():
+    import math
+    from dummy_effect_maker import motion as mo
+    from dummy_effect_maker.tools import tunnel_lines as tl, speed_lines as sl
+    v = dict(tl.TunnelLinesTool.default_values(), radius_random=0.0, length_random=0.0, thickness_random=0.0,
+             speed_random=0.0)
+    # 回転 (度) はトンネル全体を回すだけ (深さ・大きさは同じ)
+    p0, _, s0 = mo.tunnel_item(3, 12, v, True)
+    p1, _, s1 = mo.tunnel_item(3, 12, dict(v, roll=90.0), True)
+    assert abs(p0[2] - p1[2]) < 1e-9 and abs(s0[1] - s1[1]) < 1e-9
+    assert abs(math.atan2(p1[1], p1[0]) - math.atan2(p0[1], p0[0]) - math.pi / 2) % (2 * math.pi) < 1e-6
+    # 回り続けると、らせん: 1 フレームで軸の周りに回転の速さだけ進み、線は通り道に沿って伸びる
+    r = dict(v, roll_speed=6.0)
+    for direction in (mo.TUNNEL_AWAY, mo.TUNNEL_TOWARD):
+        rd = dict(r, direction=direction)
+        a, axes, sc = mo.tunnel_item(5, 20, rd, True)
+        b = mo.tunnel_item(5, 20.01, rd, False)[0]
+        da = math.atan2(b[1], b[0]) - math.atan2(a[1], a[0])
+        assert abs(da - math.radians(6.0) * 0.01) < 1e-9
+        vel = mo.unit(mo.sub(b, a))
+        assert mo.dot(axes[1], vel) > 0.98   # 線の向き ≒ 進む向き (弦なので少しずれる)
+        assert abs(mo.dot(axes[0], axes[1])) < 1e-9 and abs(mo.dot(axes[2], axes[1])) < 1e-9
+        fade = sc[0]   # 太さのばらつき 0 なので 太さの倍率 = 消え方
+        assert sc[1] <= v["length"] * fade + 1e-9 and sc[1] > 0.5 * v["length"] * fade - 1e-9
+    # 太さはスピードラインと同じ 3 点の 2 次曲線
+    w = dict(v, width_start=0.01, width_mid=0.05, width_end=0.002)
+    for t in (0.0, 0.3, 0.5, 0.8, 1.0):
+        assert abs(mo.tunnel_width_at(t, w) - sl.width_at(t, 0.01, 0.05, 0.002)) < 1e-12
+    pts = tl.shape_points(tl.SHAPE_LINE)[0]
+    assert len(pts) == 2 * tl.WIDTH_SAMPLES and {p[0] for p in pts} == {-1.0, 1.0}
+    assert abs(pts[0][1] + 1.0) < 1e-12 and abs(pts[tl.WIDTH_SAMPLES - 1][1]) < 1e-12
+    # 速さのばらつき: 線ごとに 1 フレームで進む距離が違う (0〜1 倍)。0 なら全部同じ
+    def step(vv, i):
+        return abs(mo.tunnel_item(i, 10.01, vv, True)[0][2] - mo.tunnel_item(i, 10, vv, True)[0][2]) / 0.01
+    same = [step(dict(v, speed_random=0.0), i) for i in range(12)]
+    rnd = [step(dict(v, speed_random=1.0), i) for i in range(12)]
+    assert max(same) - min(same) < 1e-6 and abs(same[0] - v["speed"]) < 1e-6
+    assert all(x <= v["speed"] + 1e-6 for x in rnd) and max(rnd) - min(rnd) > 0.2 * v["speed"]
+    # 太さのばらつき: 0〜1 倍
+    tr = dict(v, thickness_random=1.0)
+    ks = [mo.tunnel_item(i, 4, tr, True)[2][0] for i in range(40)]
+    assert all(0 <= k <= 1 for k in ks) and max(ks) - min(ks) > 0.2

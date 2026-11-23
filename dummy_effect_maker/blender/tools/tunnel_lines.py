@@ -28,6 +28,7 @@ class TunnelLinesTool(BaseTool):
     tooltip = (u"カメラがトンネルの中にいるような、消失点が画面の中にあるスピードラインを作ります。\n"
                u"カメラを選んで押してください (未選択ならシーンのカメラ)。\n"
                u"消失点の Empty (_vanish) を X / Y に動かすと、消失点が画面の中で動きます。\n"
+               u"「回転の速さ」を 0 以外にすると、トンネルが回って線が弧を描いて飛んできます。\n"
                u"線のほかに、星・ハート・菱形も流せます。形・数を変えたら「エフェクトを更新」。")
     params = mt.TunnelLinesTool.params
 
@@ -77,13 +78,15 @@ def item_vertices(obj, v, frame, cm, vanish):
                   (0.0, 0.0, 0.0, 1.0)))
     world = cm @ tun
     line = bool(obj.data["dfx_line"])
+    pts = [tmpl[3 * k:3 * k + 3] for k in range(n)]
+    if line:   # 線: X は左右の目印 (±1)。本当の X は ±太さ (入り Y = -1 → 終わり Y = 0)
+        pts = [(t[0] * mo.tunnel_width_at(t[1] + 1.0, v), t[1], t[2]) for t in pts]
     out = []
     for i in range(obj.data["dfx_count"]):
         p, axes, s = mo.tunnel_item(i, frame, v, line)
         base = Vector(p)
         ax = [Vector(axes[k]) * s[k] for k in range(3)]
-        for k in range(n):
-            t = tmpl[3 * k:3 * k + 3]
+        for t in pts:
             out.append(world @ (base + ax[0] * t[0] + ax[1] * t[1] + ax[2] * t[2]))
     return out
 
