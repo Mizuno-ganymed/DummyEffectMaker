@@ -1145,6 +1145,63 @@ def b17_wisp():
           and img.filepath.endswith("dfx_wisp_anime_v2.png"))
 
 
+# ---------------------------------------------------------------- 波打つ布
+@section
+def b18_cloth():
+    from dummy_effect_maker.blender.tools import _wx, cloth as bc
+    from dummy_effect_maker.tools import cloth as mc
+    from dummy_effect_maker import motion as mo
+    new_scene()
+    spot = bpy.data.objects.new("seaSpot", None)
+    bpy.context.scene.collection.objects.link(spot)
+    spot.location = (5, 2, 0)
+    select(spot)
+    op(bc.ClothTool, layers=3, divisions=16)
+    root = bpy.data.objects.get("dfx_cloth1")
+    stage = rt.control(root, "stage")
+    objs = bc.layer_objects(root)
+    check("波打つ布: 布タブにある・舞台は選んだ物の位置・布 3 枚 (板・格子のモディファイアー)",
+          bc.ClothTool.tab == u"布" and near(stage.location, (5, 2, 0)) and len(objs) == 3
+          and all(o.parent.parent == stage and o.modifiers["dfx_wave"].object == o["dfx_lattice"] for o in objs))
+    v = rt.read_params(root, mc.KIND.stored_params())
+    bad = []
+    for f in (1, 7, 23, 50):
+        bpy.context.scene.frame_set(f)
+        for obj in objs:
+            l = obj["dfx_layer"]
+            lat = obj["dfx_lattice"].data
+            exp = mo.cloth_lattice(l, f, v, 16, mc.ACROSS)
+            for idx, pt in enumerate(lat.points):
+                i, rest = idx % 16, idx // 16
+                k, w = rest % mc.ACROSS, rest // mc.ACROSS
+                want = (-0.5 if w == 0 else 0.5) + exp[i][mc.ACROSS - 1 - k]
+                if abs(pt.co_deform[2] - want) > 1e-5:
+                    bad.append((f, l, i, k, w))
+                    break
+            if not near(obj.parent.location, mo.zup_vector(mo.cloth_layer_offset(l, v)), 1e-6):
+                bad.append(("offset", f, l))
+    check("波打つ布: 格子の点の高さ・布の置き場所が Maya 版と同じ (横の向きは Maya の -Z = +Y)", not bad, str(bad[:3]))
+    bpy.context.scene.frame_set(12)
+    dg = bpy.context.evaluated_depsgraph_get()
+    ev = objs[0].evaluated_get(dg)
+    zs = [(ev.matrix_world @ vert.co).z for vert in ev.data.vertices]
+    check("波打つ布: 板が波打つ (格子で曲がる)", max(zs) - min(zs) > v["amplitude"], str((min(zs), max(zs))))
+    before = (ev.matrix_world @ ev.data.vertices[0].co).copy()
+    stage.rotation_euler = (0, 0, math.radians(90))
+    bpy.context.view_layer.update()
+    ev = objs[0].evaluated_get(bpy.context.evaluated_depsgraph_get())
+    after = ev.matrix_world @ ev.data.vertices[0].co
+    rb, ra = before - Vector((5, 2, 0)), after - Vector((5, 2, 0))
+    check("波打つ布: 舞台を回すと、布の束がまとめて回る", near(ra, (-rb.y, rb.x, rb.z), 1e-3), str((tuple(rb), tuple(ra))))
+    root["dfx_layers"] = 5
+    select(root)
+    op(bscene.UpdateEffectsTool)
+    check("波打つ布: 更新で枚数が変わる (舞台はそのまま)", len(bc.layer_objects(root)) == 5
+          and abs(rt.control(root, "stage").rotation_euler[2] - math.radians(90)) < 1e-6)
+    op(bscene.DeleteAllTool)
+    check("波打つ布: 全削除で格子も消える", not [l for l in bpy.data.lattices if l.get(rt.TAG_KEY)])
+
+
 @section
 def b05_delete_all():
     op(bscene.DeleteAllTool)
@@ -1157,7 +1214,8 @@ def b05_delete_all():
 for fn in (b01_register, b02_vulcan, b03_shockwave, b04_export, b05_delete_all, b06_wind,
            b07_rain_snow, b08_dust_sparks, b09_homing_energy, b10_explosion,
            b11_shakes, b12_export_more, b13_nuke, b14_lightning,
-           b15_explosion_single, b16_discharge, b17_wisp):
+           b15_explosion_single, b16_discharge, b17_wisp,
+           b18_cloth):
     fn()
 fails = [r for r in RESULTS if not r[1]]
 print("\nSUMMARY: %d passed, %d failed" % (len(RESULTS) - len(fails), len(fails)))

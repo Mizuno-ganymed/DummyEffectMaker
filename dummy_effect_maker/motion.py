@@ -794,3 +794,47 @@ def wisp_rows(s, frame, v, points, emitter_at, wind, cp, cdir):
     for j in range(last + 1, len(pts)):
         pts[j] = pts[last]
     return _strand_rows(pts, widths, cp, cdir)
+
+
+
+# ---------------------------------------------------------------- 波打つ布 (人形劇の、透ける布を重ねた海)
+# 布 l の格子の点 (長さの向き i / 横の向き k) の高さのずれ。布の空間 (Y が上、x が長さ、z が横。
+# 布の真ん中が原点) で、x と z は -0.5〜0.5 の割合。波は長さの向きに流れ、横にも少しねじれる。
+# 布ごとに「布ごとのずれ」だけ波のタイミングが遅れる (順にあおったように見える)。
+def cloth_layer_offset(layer, v):
+    """布 l の置き場所 (舞台の空間: 奥 (-Z) へ重なり、少しずつ高く)。"""
+    return (0.0, layer * v["height_step"], -layer * v["spacing"])
+
+
+def cloth_wave(layer, x, z, frame, v):
+    """布 l の、割合 (x, z) の所の高さのずれ。"""
+    sd = v["seed"]
+    length, width = v["length"], max(v["width"], 0.01)
+    kx = TAU / max(v["wavelength"], 0.01)
+    w = TAU / max(v["period"], 1.0)
+    t = frame
+    ph = TAU * (layer * v["phase_step"] + 0.15 * h(layer, 0, 61, sd))
+    ph2 = TAU * h(layer, 0, 62, sd)
+    X, Z = x * length, z * width
+    y = math.sin(kx * X - w * t - ph) + v["cross"] * math.sin(0.6 * kx * X + TAU * 0.5 * Z / width + 1.4 * w * t + ph2)
+    env = math.sin(math.pi * (x + 0.5)) if v["pin_ends"] else 1.0
+    return v["amplitude"] * y * env
+
+
+def cloth_lattice(layer, frame, v, s_div, u_div):
+    """布 l の格子の点の高さのずれ [[k ごと] i ごと] (長さの向きに s_div 個、横に u_div 個)。"""
+    out = []
+    for i in range(int(s_div)):
+        x = i / float(max(s_div - 1, 1)) - 0.5
+        row = []
+        for k in range(int(u_div)):
+            z = k / float(max(u_div - 1, 1)) - 0.5
+            row.append(cloth_wave(layer, x, z, frame, v))
+        out.append(row)
+    return out
+
+
+def cloth_color(layer, layers, v):
+    """手前 (0) → 奥の布の色。"""
+    t = layer / float(max(layers - 1, 1))
+    return tuple(a + (b - a) * t for a, b in zip(v["color_front"], v["color_back"]))

@@ -139,7 +139,8 @@ def region_at(root, frame, band=None):
     cam = bfl.camera_of(root)
     # カメラが無い時は Blender の既定のカメラ (50mm・センサー 36mm) とみなす
     zc = bfl.camera_depth(cam, frame=frame) if cam is not None else msl.camera_depth(50.0, 36.0 / 25.4)
-    return msl.plane_region(bfl.render_aspect(), zc, band)
+    reach = rt.read_params(root, [p for p in msl.SpeedLinesTool.params if p.name == "reach"])["reach"]
+    return msl.plane_region(bfl.render_aspect(), zc, band, reach)
 
 
 def update(root, frame):

@@ -57,7 +57,7 @@ MAX_LINES = 1000
 MAX_RAY = 30.0
 
 CREATE_PARAMS = ("band_width", "band_height")
-LIVE_PARAMS = ("speed", "length", "length_random", "width_start", "width_mid", "width_end",
+LIVE_PARAMS = ("speed", "length", "length_random", "width_start", "width_mid", "width_end", "reach",
                "color", "opacity", "distance")
 REBUILD_PARAMS = ("count", "speed_random", "thickness_random", "seed")
 
@@ -87,12 +87,14 @@ def camera_depth(focal_length, horizontal_aperture):
     return focal_length / max(horizontal_aperture * 12.7, 1e-6)
 
 
-def plane_region(aspect, zc, band):
+def plane_region(aspect, zc, band, reach=None):
     """線が乗る面の上での、画面の範囲 (umin, umax, vmin, vmax)。エクスプレッションと同じ式。
 
     band = (移動 X, 移動 Y, 回転 X, 回転 Y, 回転 Z)。カメラ (0, 0, zc) から画面の 4 隅
     (±1, ±1/aspect, 0) への視線と面の交点を、面の座標 (u = 流れる向き, v = 上下) で表した
     範囲。視線が面に当たらない・遠すぎる時は MAX_RAY 倍の所を面に投影する。
+    reach (奥の届く距離) を渡すと、範囲を四角から ±reach までに打ち切る (面を大きく傾けた時に、
+    線が遠くまで散らばらないように)。
     """
     tx, ty = band[0], band[1]
     ex, ey, ez = plane_axes(band[2], band[3], band[4])
@@ -111,7 +113,13 @@ def plane_region(aspect, zc, band):
         h = (d[0] * s - tx, d[1] * s - ty, zc + d[2] * s)
         us.append(h[0] * ex[0] + h[1] * ex[1] + h[2] * ex[2])
         vs.append(h[0] * ey[0] + h[1] * ey[1] + h[2] * ey[2])
-    return min(us), max(us), min(vs), max(vs)
+    umin, umax, vmin, vmax = min(us), max(us), min(vs), max(vs)
+    if reach is not None:
+        r = max(reach, 0.0)
+        umin, umax = max(umin, -r), min(umax, r)
+        vmin, vmax = max(vmin, -r), min(vmax, r)
+        umax, vmax = max(umax, umin), max(vmax, vmin)
+    return umin, umax, vmin, vmax
 
 
 def _hash(k, i, seed, a, b, c, d):
@@ -185,6 +193,9 @@ class SpeedLinesTool(BaseTool):
         Param("distance", u"カメラからの距離", 1.0, minimum=0.001, step=0.5,
               tooltip=u"線を置く位置。物体より手前になるよう小さめに\n"
                       u"(ただしカメラのニアクリップより大きく)"),
+        Param("reach", u"奥の届く距離", 4.0, minimum=0.1, step=0.5,
+              tooltip=u"線が流れる範囲を、四角からこの距離まで (画面の横幅の半分 = 1) に打ち切る。\n"
+                      u"四角を X / Y に大きく傾けた時に、線が遠く (奥) まで散らばらないようにする"),
         Param("count", u"本数", 40, minimum=1, maximum=MAX_LINES),
         Param("speed_random", u"速さのばらつき", 0.3, minimum=0.0, maximum=1.0, step=0.1,
               tooltip=u"0 で全部同じ速さ。1 で 0 〜「速さ」までばらつく"),
@@ -386,7 +397,7 @@ def build_effect(cmds, mu, root, v, camera, band=None, band_size=(0.5, 0.2)):
     owned.append(flow)
     # 面の上での画面の範囲 (毎フレーム)
     owned.append(cmds.expression(name=prefix + "_region", alwaysEvaluate=True, unitConversion="all",
-                                 string=_region_expression(band, flow, cam_shape)))
+                                 string=_region_expression(band, flow, cam_shape, prefix)))
 
     # --- 線の元メッシュ: x=0 (入り) → x=1 (終わり)。太さは頂点をエクスプレッションで動かす
     src = fl.make_source(cmds, frame, prefix + "_lineSrc", source_points(), owned)
@@ -435,7 +446,7 @@ def _width_expression(r, shape):
     return u"\n".join(out) + u"\n"
 
 
-def _region_expression(band, flow, cam_shape):
+def _region_expression(band, flow, cam_shape, r):
     """面の上での画面の範囲を _flow に書く (plane_region と同じ式)。"""
     b, f, c = _short(band), _short(flow), _short(cam_shape)
     return u"""
@@ -480,11 +491,16 @@ for ($k = 0; $k < 4; $k++) {{
     $vmin = min($vmin, $v);
     $vmax = max($vmax, $v);
 }}
+float $reach = max({r}.dfx_reach, 0);
+$umin = max($umin, -$reach);
+$umax = max(min($umax, $reach), $umin);
+$vmin = max($vmin, -$reach);
+$vmax = max(min($vmax, $reach), $vmin);
 {f}.dfx_umin = $umin;
 {f}.dfx_umax = $umax;
 {f}.dfx_vmin = $vmin;
 {f}.dfx_vmax = $vmax;
-""".format(b=b, f=f, c=c, smax=repr(MAX_RAY))
+""".format(b=b, f=f, c=c, r=r, smax=repr(MAX_RAY))
 
 
 def _line_expression(r, band, flow, line):

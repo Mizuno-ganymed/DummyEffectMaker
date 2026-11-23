@@ -380,7 +380,7 @@ def l03_focus_motion():
 # ---------------------------------------------------------------- スピードライン
 def expected_speed(v, f, band, hb, zc, seeds):
     """各線の頂点 (上側・下側) を Maya 版の関数で。"""
-    region = msl.plane_region(aspect(), zc, band)
+    region = msl.plane_region(aspect(), zc, band, v.get("reach"))
     ex, ey, _ = msl.plane_axes(band[2], band[3], band[4])
     n = msl.WIDTH_SAMPLES
     out = []

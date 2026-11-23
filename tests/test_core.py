@@ -142,7 +142,8 @@ def test_tools_are_grouped_into_tabs():
     tools = registry.discover("dummy_effect_maker.tools")
     tabs = [(tab, [t.label for t in ts]) for tab, ts in registry.group_by_tab(tools)]
     assert [tab for tab, _ in tabs] == [u"ツール", u"カメラ", u"エネルギー弾", u"衝撃波", u"お化けブラー",
-                                        u"天候", u"爆発"]
+                                        u"天候", u"爆発", u"布"]
+    assert dict(tabs)[u"布"] == [u"波打つ布", u"波打つ布を更新"]
     assert dict(tabs)[u"爆発"] == [
         u"コリジョンに指定", u"コリジョンを解除", u"爆発", u"爆発 (単体)", u"爆発を更新", u"爆発を外す",
         u"爆発のパラメータを保存", u"爆発のパラメータを読み込み",
@@ -811,7 +812,7 @@ def test_ghost_blur_smear_points():
 
 
 def test_weather_params_are_live_rebuild_or_create():
-    assert len(wx.KINDS) == 20   # 天候 18 (稲妻・放電 各 2 つ・細い煙を含む) + 核爆発・爆発 (単体) (同じ仕組み)
+    assert len(wx.KINDS) == 21   # 天候 18 (稲妻・放電 各 2 つ・細い煙を含む) + 核爆発・爆発 (単体)・波打つ布 (同じ仕組み)
     for kind in wx.KINDS.values():
         names = set(p.name for p in kind.tool.params)
         stored = set(kind.live) | set(kind.rebuild)
@@ -1230,3 +1231,34 @@ def test_lightning_jag_tapers_toward_end():
     assert abs(taper[0] / flat[0] - (1 - 0.7 * 1 / 11.0)) < 1e-9
     assert abs(taper[-1] / flat[-1] - (1 - 0.7 * 10 / 11.0)) < 1e-9
     assert mo.jag_scale({"jag_taper": 0.0}, 1.0) == 0.0 and mo.jag_scale({}, 0.7) == 1.0
+
+
+def test_cloth_waves_layers_and_pins():
+    from dummy_effect_maker import motion as mo
+    from dummy_effect_maker.tools import cloth
+    v = cloth.ClothTool.default_values()
+    # 奥の布ほど奥 (-Z) で少し高い。色は手前 → 奥
+    assert mo.cloth_layer_offset(2, v) == (0.0, 2 * v["height_step"], -2 * v["spacing"])
+    assert _close3(mo.cloth_color(0, 4, v), v["color_front"]) and _close3(mo.cloth_color(3, 4, v), v["color_back"])
+    # 波は長さの向きに流れる (周期でもとに戻る)。布ごとにずれる
+    a = mo.cloth_wave(0, 0.1, 0.2, 10, v)
+    assert abs(mo.cloth_wave(0, 0.1, 0.2, 10 + v["period"], dict(v, cross=0.0)) - mo.cloth_wave(0, 0.1, 0.2, 10, dict(v, cross=0.0))) < 1e-6
+    assert abs(a) <= v["amplitude"] * (1 + v["cross"]) + 1e-9 and a != mo.cloth_wave(1, 0.1, 0.2, 10, v)
+    # 両端を押さえると端は 0
+    pinned = dict(v, pin_ends=True)
+    assert abs(mo.cloth_wave(0, -0.5, 0.0, 7, pinned)) < 1e-12 and abs(mo.cloth_wave(0, 0.5, 0.3, 7, pinned)) < 1e-9
+    grid = mo.cloth_lattice(0, 5, v, 6, cloth.ACROSS)
+    assert len(grid) == 6 and all(len(r) == cloth.ACROSS for r in grid)
+    assert set(cloth.KIND.rebuild) == set(("layers", "length", "width", "divisions"))
+    assert cloth.ClothTool.tab == u"布" and not cloth.KIND.need_wind and not cloth.KIND.need_camera
+
+
+def test_speed_lines_reach_clamps_tilted_region():
+    from dummy_effect_maker.tools import speed_lines
+    zc = speed_lines.camera_depth(35.0, 1.417)
+    wide = speed_lines.plane_region(16 / 9.0, zc, (0, 0, 0, 65, 0))
+    cut = speed_lines.plane_region(16 / 9.0, zc, (0, 0, 0, 65, 0), 4.0)
+    assert wide[1] > 10 and cut[1] == 4.0 and cut[2] == -4.0 and cut[0] == wide[0]   # 手前側はそのまま
+    flat = speed_lines.plane_region(16 / 9.0, zc, (0, 0, 0, 0, 0))
+    assert speed_lines.plane_region(16 / 9.0, zc, (0, 0, 0, 0, 0), 4.0) == flat        # 傾けなければ変わらない
+    assert "reach" in speed_lines.LIVE_PARAMS
