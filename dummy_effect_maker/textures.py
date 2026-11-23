@@ -194,7 +194,44 @@ def fog_card(path):
     write_png(path, _alpha_canvas(rows))
 
 
-GENERATORS = {"rain": rain, "snow": snow, "puff": puff, "fog_tile": fog_tile, "fog_card": fog_card}
+def _smoothstep(e0, e1, x):
+    t = min(1.0, max(0.0, (x - e0) / (e1 - e0)))
+    return t * t * (3 - 2 * t)
+
+
+def _wisp_rows(seed, anime):
+    """煙の筋の帯の絵 (横 = 根元 → 先、縦 = 帯の幅)。白 + 透明度。"""
+    w, hgt = 256, 64
+    noise = value_noise(w, hgt, 4, seed, octaves=3)
+    rows = []
+    for y in range(hgt):
+        v = (y + 0.5) / hgt
+        row = []
+        for x in range(w):
+            u = (x + 0.5) / w
+            edge = math.exp(-((v - 0.5) / 0.2) ** 2)                       # 幅の真ん中が濃く、ふちは消える
+            along = _smoothstep(0.0, 0.04, u) * (1 - _smoothstep(0.3, 1.0, u)) ** 1.2   # 出始めと先で薄く
+            threads = 0.55 + 0.45 * noise[y][x]                             # 細い筋が何本か流れる
+            a = edge * along * threads
+            if anime:
+                a = posterize(a, levels=(0.12, 0.3, 0.5), alphas=(0.0, 0.35, 0.65, 0.9), soft=0.015)
+            row.append(a)
+        rows.append(row)
+    return rows
+
+
+def wisp(path):
+    """細い煙の筋 (実写調: やわらかく消える)。"""
+    write_png(path, _alpha_canvas(_wisp_rows("dfx-wisp", False)))
+
+
+def wisp_anime(path):
+    """細い煙の筋 (アニメ調: くっきりした濃さの段)。"""
+    write_png(path, _alpha_canvas(_wisp_rows("dfx-wisp", True)))
+
+
+GENERATORS = {"rain": rain, "snow": snow, "puff": puff, "fog_tile": fog_tile, "fog_card": fog_card,
+              "wisp": wisp, "wisp_anime": wisp_anime}
 VERSION = 2   # 絵を変えたら上げる (古い絵のファイルを使い続けないように)
 
 

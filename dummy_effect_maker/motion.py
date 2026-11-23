@@ -588,11 +588,16 @@ def lightning_frame(top, ground):
     return length, d, a, cross(d, a)
 
 
+def jag_scale(v, u):
+    """ギザギザの大きさの倍率 (雲・発生の側 u = 0 で 1 → 終端 u = 1 で「終端のギザギザ」)。"""
+    return 1 - (1 - v.get("jag_taper", 1.0)) * u
+
+
 def lightning_main_point(style, k, n, c, v, top, ground):
     length, d, a, b = lightning_frame(top, ground)
     u = k / float(max(n - 1, 1))
     oa, ob = lightning_offset(style, k, n, u, c, v["seed"])
-    jag = length * v["jag"]
+    jag = length * v["jag"] * jag_scale(v, u)
     return add(add(top, mul(sub(ground, top), u)), add(mul(a, oa * jag), mul(b, ob * jag)))
 
 
@@ -673,7 +678,7 @@ def lightning_rows(style, frame, v, top, ground, cp, cdir, segments, branches, b
         for j in range(m):
             u = j / float(max(m - 1, 1))
             oa, ob = lightning_branch_offset(style, j, m, u, cb, sd)
-            jag = lb * v["jag"]
+            jag = lb * v["jag"] * jag_scale(v, tb)   # 枝は出た所のギザギザの大きさ
             bpts.append(add(add(start, mul(db, lb * u)), add(mul(ab, oa * jag), mul(bb, ob * jag))))
             bw.append(v["width"] * 0.5 * (1 - (1 - v["taper"]) * tb) * (1 - u) if prog > tb and j <= blast else 0.0)
         for j in range(blast + 1, m):
@@ -731,3 +736,61 @@ def discharge_probe(start, end, reach):
     n = mag(d)
     u = unit(d) if n > 1e-9 else (0.0, -1.0, 0.0)
     return add(start, mul(d, 0.5)), add(end, mul(u, reach))
+
+
+
+# ---------------------------------------------------------------- 細い煙 (たばこ・線香の、たゆたう煙の筋)
+# 煙の筋は「同じ所から出た煙が、それぞれ流されて並んだ跡」。筋 s の点 j は、出てから a フレーム
+# (a = 消えるまで × j / (点の数 - 1)) たった煙で、その位置を出た時刻 te = frame - a から直接計算する
+# (前のフレームから積み上げないので、どのフレームにも飛べる)。
+#   上がる: 速さ × a。風: 出てから今までに流された距離
+#   揺れ:  まっすぐ上がる間は 0、その後 a とともに大きくなる。なめらかな乱数で、入力は「高さ / 揺れの長さ」と
+#          「出た時刻 × 揺れの速さ」なので、出た煙ごとに揺れの形を持ったまま上がり、ゆっくり形を変えながら
+#          上ほど大きく曲がる (筋どうしは乱数が違うので、絡み合って巻いたように見える)
+def _snoise(x, c, k, sd):
+    """なめらかな乱数 (-1〜1)。整数の所の乱数を smoothstep でつなぐ。"""
+    i = math.floor(x)
+    f = x - i
+    f = f * f * (3 - 2 * f)
+    a = h(i, c, k, sd)
+    return (a + (h(i + 1, c, k, sd) - a) * f) * 2 - 1
+
+
+def wisp_point(s, j, frame, v, points, emitter_at, wind):
+    """筋 s の点 j の (位置, 太さ, 生きているか)。emitter_at(t) は出る場所の行列 (Y が上)。"""
+    sd = v["seed"]
+    life = max(v["life"], 1.0)
+    a = life * j / float(max(points - 1, 1))
+    te = frame - a
+    alive = te >= v["start_frame"]
+    em = emitter_at(te)
+    e = (em[12], em[13], em[14])
+    spd = v["speed"] * (1 + (h(s, 0, 41, sd) - 0.5) * 0.4)
+    y = spd * a
+    lam = v["laminar"]
+    r = clamp(0, 1, (a - lam) / max(life - lam, 1e-3))
+    amp = v["turbulence"] * r ** 1.5
+    q = y / max(v["wavelength"], 0.01) + v["swirl"] * te
+    ox = amp * (_snoise(q, s, 46, sd) + 0.5 * _snoise(2.1 * q + 7.3, s, 47, sd))         + v["root_spread"] * (h(s, 0, 44, sd) - 0.5)
+    oz = amp * (_snoise(q + 13.7, s, 48, sd) + 0.5 * _snoise(2.1 * q + 3.1, s, 49, sd))         + v["root_spread"] * (h(s, 0, 45, sd) - 0.5)
+    wd = mul(sub(wind.drift_at(frame), wind.drift_at(te)), wind.influence)
+    p = add(add(e, (ox, y, oz)), wd)
+    width = v["width_start"] + (v["width_end"] - v["width_start"]) * (a / life) ** 0.7
+    return p, width, alive
+
+
+def wisp_rows(s, frame, v, points, emitter_at, wind, cp, cdir):
+    """筋 s の帯の行 [(位置, (X, Y, Z), 太さ)] (根元 → 先)。まだ出ていない所は太さ 0 で、一番古い点に重ねる。"""
+    pts, widths = [], []
+    last = -1
+    for j in range(int(points)):
+        p, w, alive = wisp_point(s, j, frame, v, int(points), emitter_at, wind)
+        pts.append(p)
+        widths.append(w if alive else 0.0)
+        if alive:
+            last = j
+    if last < 0:
+        return [(pts[0], IDENTITY, 0.0)] * len(pts)
+    for j in range(last + 1, len(pts)):
+        pts[j] = pts[last]
+    return _strand_rows(pts, widths, cp, cdir)

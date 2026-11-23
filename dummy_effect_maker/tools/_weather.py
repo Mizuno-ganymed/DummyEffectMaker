@@ -657,7 +657,7 @@ def kind_of(cmds, mu, root):
 
 
 # 色・透明度をテクスチャ (画像・ランプ) で作る種類。ビューポートのテクスチャ表示が OFF だと黒くなる
-TEXTURED_TYPES = ("dust", "dust_mesh", "rain_far", "snow_far", "fog", "ground_fog", "ground_crawl")
+TEXTURED_TYPES = ("dust", "dust_mesh", "wisp", "rain_far", "snow_far", "fog", "ground_fog", "ground_crawl")
 TEXTURE_HINT = (u"  ※ ビューポートのテクスチャ表示が OFF のため、黒く (不透明に) 表示されます。"
                 u"ビューポートで 6 キー (シェーディング → ハードウェアテクスチャリング) を押すと正しく表示されます")
 
@@ -688,7 +688,7 @@ def warn_if_textures_hidden(cmds, ctx):
 
 # 半透明が見どころの種類。ハードウエアレンダリングの透明度が「アルファ カット」だと消える
 TRANSLUCENT_TYPES = ("rain", "rain_far", "snow_far", "fog", "fog_depth", "ground_fog",
-                     "ground_crawl", "lightning_real", "lightning_anime")
+                     "ground_crawl", "lightning_real", "lightning_anime", "wisp")
 ALPHA_CUT = 5   # hardwareRenderingGlobals.transparencyAlgorithm の「アルファ カット」
 ALPHA_CUT_HINT = (u"  ※ ハードウエアレンダリングの透明度のアルゴリズムが「アルファ カット」のため、"
                   u"半透明の部分がビューポートと Hardware 2.0 で消えます。"

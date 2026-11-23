@@ -1072,11 +1072,77 @@ def b16_discharge():
                 bad.append(("flash", f, e))
     check("放電: 小爆発は爆発と同じ計算 (当たった所ごと)", _wx.part(root, "_flashes").data["dfx_count"] == len(hits) and not bad,
           str(bad[:3]))
+    ok = True
+    for tool in (bex.ExplosionTool, bex.ExplosionUpdateTool):
+        select(root)
+        try:
+            op(tool)
+        except RuntimeError:
+            ok = False
+    check("放電: 選んで「爆発」「爆発を更新」を押すと、当たりを計算し直す (弾を選べとは言わない)",
+          ok and len(_bl.read_hits(root)) == len(hits) and bpy.data.objects.get("dfx_explosion1") is None)
     path = os.path.join(TMP, "shot_discharge")
     op(bscene.ExportShotTool, path=path, range_mode=bscene.RANGE_CUSTOM, start_frame=1.0, end_frame=10.0)
     eff = [e for e in xc.read_shot(path + ".json")["effects"] if e["type"] == "discharge_anime"][0]
     check("放電: 書き出し (当たり・発生と終端)", len(eff["data"]["hits"]) == len(hits)
           and sorted(c["role"] for c in eff["controls"]) == ["end", "start"])
+
+
+# ---------------------------------------------------------------- 細い煙
+@section
+def b17_wisp():
+    from dummy_effect_maker.blender.tools import _wx, wisp as bwisp, wind as bwind
+    from dummy_effect_maker.tools import wisp as mw
+    from dummy_effect_maker import motion as mo
+    new_scene()
+    cam = scene_camera(loc=(0, -20, 4))
+    select()
+    op(bwind.WindTool, strength=0.05, gust=0.0)
+    stick = bpy.data.objects.new("incense", None)
+    bpy.context.scene.collection.objects.link(stick)
+    stick.location = (0, 0, 0)
+    stick.keyframe_insert("location", frame=1)
+    stick.location = (3, 0, 0)
+    stick.keyframe_insert("location", frame=60)
+    select(stick, cam)
+    op(bwisp.WispTool, count=2, points=16, life=40.0, laminar=10.0)
+    root = bpy.data.objects.get("dfx_wisp1")
+    obj = _wx.part(root, "_strands")
+    em = rt.control(root, "emitter")
+    uv = obj.data.uv_layers[0].data
+    us = sorted(set(round(l.uv[0], 6) for l in uv))
+    img = _wx.material_of(obj).node_tree.nodes["dfx_image"].image
+    check("細い煙: 作れる (出る場所は選んだ物の子・風とつながる・UV は根元 0 → 先 1・煙の絵)",
+          root is not None and em.parent == stick and root.get("dfx_wind") == bpy.data.objects.get("dfx_wind1")
+          and obj.data["dfx_count"] == 32 and us[0] == 0 and us[-1] == 1 and len(us) == 16
+          and img is not None and img.filepath.endswith("dfx_wisp_v2.png"))
+    v = rt.read_params(root, mw.KIND.stored_params())
+    at = _wx.emitter_at(root)
+    bad = []
+    for f in (1, 5, 20, 45, 59):
+        bpy.context.scene.frame_set(f)
+        cp, cdir = _wx.camera_yup(root)
+        wind = _wx.wind_of(root)
+        k = 0
+        for s in range(2):
+            for p, axes, w in mo.wisp_rows(s, f, v, 16, at, wind, cp, cdir):
+                if not same_particle(obj, k, (p, axes, (w,) * 3) if w > 1e-9 else _wx.hidden(p)):
+                    bad.append((f, s, k))
+                k += 1
+    check("細い煙: Maya 版と同じ計算 (キーで動く出る場所・風)", not bad, str(bad[:3]))
+    bpy.context.scene.frame_set(50)
+    base = em.matrix_world.translation
+    root_pts = [Vector(_wx.read_particle(obj, j)[0]) for j in range(3)]
+    check("細い煙: 根元はまっすぐ上 (+Z) に上がる", root_pts[0].z < root_pts[1].z < root_pts[2].z
+          and abs(root_pts[0].x - base.x) < 0.1, str([tuple(p) for p in root_pts]))
+    root["dfx_count"] = 3
+    root["dfx_style"] = mw.STYLE_ANIME
+    select(root)
+    op(bscene.UpdateEffectsTool)
+    obj = _wx.part(root, "_strands")
+    img = _wx.material_of(obj).node_tree.nodes["dfx_image"].image
+    check("細い煙: 更新で筋の数・見た目 (アニメの絵) が変わる", obj.data["dfx_count"] == 48
+          and img.filepath.endswith("dfx_wisp_anime_v2.png"))
 
 
 @section
@@ -1091,7 +1157,7 @@ def b05_delete_all():
 for fn in (b01_register, b02_vulcan, b03_shockwave, b04_export, b05_delete_all, b06_wind,
            b07_rain_snow, b08_dust_sparks, b09_homing_energy, b10_explosion,
            b11_shakes, b12_export_more, b13_nuke, b14_lightning,
-           b15_explosion_single, b16_discharge):
+           b15_explosion_single, b16_discharge, b17_wisp):
     fn()
 fails = [r for r in RESULTS if not r[1]]
 print("\nSUMMARY: %d passed, %d failed" % (len(RESULTS) - len(fails), len(fails)))

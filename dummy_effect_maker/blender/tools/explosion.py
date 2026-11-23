@@ -60,7 +60,8 @@ class ColliderSetTool(BaseTool):
         for o in objs:
             o[COLLIDER_KEY] = True
             ctx.log(u"  %s をコリジョンにしました" % o.name)
-        ctx.log(u"  弾 (追尾弾・バルカン砲・エネルギー弾) を選んで「爆発」(作成済みなら「爆発を更新」) を押すと当たりを計算します")
+        ctx.log(u"  弾 (追尾弾・バルカン砲・エネルギー弾) を選んで「爆発」(作成済みなら「爆発を更新」) を押すと当たりを計算します。"
+                u"放電は、放電を選んで「爆発を更新」で当たりを計算し直します")
         return [o.name for o in objs]
 
 
@@ -183,7 +184,10 @@ class ExplosionTool(BaseTool):
     tooltip = mx.ExplosionTool.tooltip
 
     def run(self, ctx, **v):
+        done = rebuild_discharges(ctx)   # 放電を選んでいれば、その当たりを計算し直す
         sources = [r for r in rt.selected_roots(bpy.context) if r[rt.TYPE_KEY] in mx.BULLET_TYPES]
+        if done and not sources:
+            return done
         if not sources:
             raise ToolError(u"爆発させる弾 (追尾弾・バルカン砲・エネルギー弾のルートか、その中の弾) を選択してください")
         if not colliders():
@@ -217,6 +221,10 @@ class ExplosionUpdateTool(BaseTool):
     tooltip = mx.ExplosionUpdateTool.tooltip
 
     def run(self, ctx, **v):
+        done = rebuild_discharges(ctx)   # 放電の当たりと爆発も計算し直す
+        if done and not [r for r in rt.selected_roots(bpy.context)
+                         if r[rt.TYPE_KEY] in (mx.EFFECT_TYPE,) + mx.BULLET_TYPES]:
+            return done
         roots = selected_explosions(u"更新する")
         for root in roots:
             bd.rebuild(root)
@@ -240,6 +248,21 @@ class ExplosionRemoveTool(BaseTool):
                 rt.update_root(source)
             ctx.log(u"  %s を外しました" % name)
         return len(roots)
+
+
+def rebuild_discharges(ctx):
+    """選んだ放電の、終端の側がコリジョンに当たる所と爆発を計算し直す (放電は自分の中に爆発を持つ)。"""
+    from ...tools import lightning as ml
+    roots = [r for r in rt.selected_roots(bpy.context) if r[rt.TYPE_KEY] in ml.DISCHARGE_TYPES]
+    if not roots:
+        return []
+    if not colliders():
+        raise ToolError(u"コリジョンがありません。放電の終端がぶつかる相手 (地面など) を選んで「コリジョンに指定」を押してください")
+    for root in roots:
+        bd.rebuild(root)
+        ctx.log(u"  %s: 放電は、終端の側がコリジョンに当たった所で爆発します (%d 回)"
+                % (root.name, len(_bl.read_hits(root))))
+    return [r.name for r in roots]
 
 
 def selected_explosions(purpose):

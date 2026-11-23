@@ -103,6 +103,9 @@ def _params(real):
              Param("branch_segments", u"枝の点の数", d(14, 5), minimum=2, maximum=60),
              Param("jag", u"ギザギザの大きさ", d(0.05, 0.15), minimum=0.0, step=0.01, decimals=3,
                    tooltip=u"横へのずれ (長さの割合)"),
+             Param("jag_taper", u"終端のギザギザ", d(1.0, 0.3), minimum=0.0, maximum=1.0, step=0.1,
+                   tooltip=u"終端 (地面・終端の側) でのギザギザの大きさ (雲・発生の側に対する割合)。\n"
+                           u"1 で同じ、小さいほど終端に向かって細かく (まっすぐに) なる"),
              Param("branch_length", u"枝の長さ", d(0.35, 0.3), minimum=0.0, step=0.05,
                    tooltip=u"本筋の長さの割合"),
              Param("width", u"太さ", d(0.05, 2.5), minimum=0.0, step=d(0.01, 0.1), decimals=3),
@@ -214,6 +217,7 @@ if ($len > 1e-9) $d = unit($dd);
 """ + (u"float $prog = 1;" + chr(10) if discharge else u"""float $prog = 1;
 if ({r}.dfx_grow_frames > 0) $prog = clamp(0, 1, ($f - $ts) / {r}.dfx_grow_frames);
 """.format(r=r)) + u"""float $jagM = $len * {r}.dfx_jag;
+float $jt = {r}.dfx_jag_taper;
 """.format(r=r)
 
 
@@ -249,7 +253,8 @@ def _main_point(style, kv, n, dst):
     """本筋の点 kv (lightning_main_point と同じ) を vector dst に。"""
     return u"{{\nfloat $u = {k} / {n1};\n".format(k=kv, n1=repr(float(max(n - 1, 1)))) + \
         _offset(style, kv, n, "$u", "$c", False) + \
-        u"{d} = $t0 + ($g0 - $t0) * $u + $A * ($oa * $jagM) + $B * ($ob * $jagM);\n}}\n".format(d=dst)
+        u"float $js = $jagM * (1 - (1 - $jt) * $u);\n" \
+        u"{d} = $t0 + ($g0 - $t0) * $u + $A * ($oa * $js) + $B * ($ob * $js);\n}}\n".format(d=dst)
 
 
 def _subdivide_code(style, count):
@@ -353,7 +358,7 @@ if ($c >= 0) {{
     float $pb = clamp(0, 1, ($prog - $tbr) / 0.3);
     int $blast = 0;
     if ($prog > $tbr) $blast = min({mlast}, floor(($pb + 1e-9) * {m1}));
-    float $jagB = $lb * {r}.dfx_jag;
+    float $jagB = $lb * {r}.dfx_jag * (1 - (1 - $jt) * $tbr);
     int $cb = $c * 13 + {br} + 1;
     for ($j = 0; $j < {m}; $j++) {{
         float $ub = $j / {m1};

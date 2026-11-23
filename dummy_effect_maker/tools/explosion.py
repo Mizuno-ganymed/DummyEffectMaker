@@ -115,7 +115,8 @@ class ColliderSetTool(BaseTool):
                 cmds.addAttr(node, longName=COLLIDER_ATTR, attributeType="bool", defaultValue=True)
             cmds.setAttr(node + "." + COLLIDER_ATTR, True)
             ctx.log(u"  %s をコリジョンにしました" % wx.short(node))
-        ctx.log(u"  弾 (追尾弾・バルカン砲・エネルギー弾) を選んで「爆発」(作成済みなら「爆発を更新」) を押すと当たりを計算します")
+        ctx.log(u"  弾 (追尾弾・バルカン砲・エネルギー弾) を選んで「爆発」(作成済みなら「爆発を更新」) を押すと当たりを計算します。"
+                u"放電は、放電を選んで「爆発を更新」で当たりを計算し直します")
         return nodes
 
 
@@ -154,6 +155,9 @@ class ExplosionTool(BaseTool):
     def run(self, ctx, **v):
         from maya import cmds
         from . import _maya_utils as mu
+        done = rebuild_discharges(cmds, mu, ctx)   # 放電を選んでいれば、その当たりを計算し直す
+        if done and not _has_bullets(cmds, mu):
+            return done
         sources = bullet_roots(cmds, mu)
         if not colliders(cmds):
             raise ToolError(u"コリジョンがありません。ぶつける相手のモデルを選んで「コリジョンに指定」を押してください")
@@ -198,6 +202,9 @@ class ExplosionUpdateTool(BaseTool):
         others = [r for r in mu.selected_effect_roots()
                   if r not in singles and cmds.getAttr(r + "." + mu.EFFECT_TYPE_ATTR) in (EFFECT_TYPE,) + BULLET_TYPES]
         result = wx.rebuild_effects(cmds, mu, ctx, singles) if singles else []
+        discharged = rebuild_discharges(cmds, mu, ctx)   # 放電の当たりと爆発も計算し直す
+        result += discharged
+        singles = singles + discharged
         if others or not singles:
             result += rebuild_effects(cmds, mu, ctx, selected_roots(cmds, mu, u"更新する"))
         cmds.select(result)
@@ -257,6 +264,34 @@ class ExplosionLoadPresetTool(BaseTool):
 def stored_params():
     by_name = dict((p.name, p) for p in ExplosionTool.params)
     return [by_name[n] for n in LIVE_PARAMS + REBUILD_PARAMS]
+
+
+def _discharge_types():
+    from . import lightning
+    return lightning.DISCHARGE_TYPES
+
+
+def _has_bullets(cmds, mu):
+    return any(cmds.getAttr(r + "." + mu.EFFECT_TYPE_ATTR) in BULLET_TYPES + (EFFECT_TYPE,)
+               for r in mu.selected_effect_roots())
+
+
+def rebuild_discharges(cmds, mu, ctx):
+    """選んだ放電の、終端の側がコリジョンに当たる所と爆発を計算し直す。作り直した放電を返す。
+
+    放電は自分の中に爆発を持っているので、「爆発」「爆発を更新」のどちらで押しても同じ。
+    """
+    roots = [r for r in mu.selected_effect_roots()
+             if cmds.getAttr(r + "." + mu.EFFECT_TYPE_ATTR) in _discharge_types()]
+    if not roots:
+        return []
+    if not colliders(cmds):
+        raise ToolError(u"コリジョンがありません。放電の終端がぶつかる相手 (地面など) を選んで「コリジョンに指定」を押してください")
+    result = wx.rebuild_effects(cmds, mu, ctx, roots)
+    for root in roots:
+        n = len(read_hits(cmds, root)) if cmds.attributeQuery(HITS_ATTR, node=root, exists=True) else 0
+        ctx.log(u"  %s: 放電は、終端の側がコリジョンに当たった所で爆発します (%d 回)" % (wx.short(root), n))
+    return result
 
 
 def selected_meshes(cmds):

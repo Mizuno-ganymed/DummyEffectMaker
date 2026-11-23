@@ -149,12 +149,12 @@ def test_tools_are_grouped_into_tabs():
         u"核爆発", u"核爆発を更新", u"核爆発のパラメータを保存", u"核爆発のパラメータを読み込み"]
     assert dict(tabs)[u"天候"] == [
         u"風", u"風を更新", u"雨 (線と跳ね)", u"雨 (遠景の筒)", u"雪 (粒)", u"雪 (遠景の筒)",
-        u"土煙 (スプライト)", u"土煙 (もこもこ)", u"火花 (線)", u"火花 (尾を引く)",
+        u"土煙 (スプライト)", u"土煙 (もこもこ)", u"細い煙 (たばこ・線香)", u"火花 (線)", u"火花 (尾を引く)",
         u"霧 (霧の板)", u"霧 (遠景の重ね板)", u"地霧 (重ね板)", u"地霧 (這う霧)",
         u"稲妻 (実写)", u"稲妻 (アニメ)", u"放電 (実写)", u"放電 (アニメ)", u"天候を更新", u"天候のパラメータを保存", u"天候のパラメータを読み込み"]
     weather_tools = [t for t in tools if t.tab == u"天候"]
     assert [c for c, _ in registry.group_by_category(weather_tools)] == [
-        u"風", u"雨", u"雪", u"土煙", u"火花", u"霧", u"地霧", u"稲妻", u"調整"]
+        u"風", u"雨", u"雪", u"土煙", u"煙", u"火花", u"霧", u"地霧", u"稲妻", u"調整"]
     assert dict(tabs)[u"お化けブラー"] == [
         u"残像", u"スミア (引き伸ばし)", u"軌跡", u"お化けブラーを更新",
         u"お化けブラーのパラメータを保存", u"お化けブラーのパラメータを読み込み"]
@@ -811,7 +811,7 @@ def test_ghost_blur_smear_points():
 
 
 def test_weather_params_are_live_rebuild_or_create():
-    assert len(wx.KINDS) == 19   # 天候 17 (稲妻・放電 各 2 つを含む) + 核爆発・爆発 (単体) (同じ仕組み)
+    assert len(wx.KINDS) == 20   # 天候 18 (稲妻・放電 各 2 つ・細い煙を含む) + 核爆発・爆発 (単体) (同じ仕組み)
     for kind in wx.KINDS.values():
         names = set(p.name for p in kind.tool.params)
         stored = set(kind.live) | set(kind.rebuild)
@@ -947,7 +947,7 @@ def test_file_param_and_weather_texture_option():
     with_texture = [k.effect_type for k in wx.KINDS.values()
                     if "texture" in [p.name for p in k.tool.params]]
     assert sorted(with_texture) == sorted(["dust", "rain_far", "snow_far", "fog", "ground_fog",
-                                           "ground_crawl"])
+                                           "ground_crawl", "wisp"])
     for name in with_texture:
         kind = wx.KINDS[name]
         assert "texture" in kind.rebuild and "texture" not in kind.live
@@ -1176,3 +1176,57 @@ def test_discharge_flows_between_two_points():
     assert _close(p0[0], 3.0) and _close(p0[1], 4.0) and _close(p1[0], 6.6) and _close(p1[1], -0.8)
     names = [p.name for p in lt.DischargeAnimeTool.params]
     assert "count" not in names and "end_frame" in names and "flash_size" in names and "sides" in names
+
+
+def test_wisp_rises_straight_then_sways():
+    near = _close3
+    from dummy_effect_maker import motion as mo
+    from dummy_effect_maker.tools import wisp
+    v = wisp.WispTool.default_values()
+    v.update(start_frame=1.0, root_spread=0.0)
+    origin = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2.0, 1.0, -3.0, 1]
+    at = lambda t: origin   # noqa: E731
+    pts = 40
+    p0, w0, alive0 = mo.wisp_point(0, 0, 200, v, pts, at, mo.Wind())
+    assert alive0 and near(p0, (2.0, 1.0, -3.0)) and _close(w0, v["width_start"])
+    # まっすぐ上がる間は横にずれない。上ほど高く、太い
+    j_lam = int(v["laminar"] / v["life"] * (pts - 1))
+    p, w, _ = mo.wisp_point(0, j_lam, 200, v, pts, at, mo.Wind())
+    assert abs(p[0] - 2.0) < 1e-9 and abs(p[2] + 3.0) < 1e-9 and p[1] > 1.0 and w > w0
+    tip, wt, _ = mo.wisp_point(0, pts - 1, 200, v, pts, at, mo.Wind())
+    assert tip[1] > p[1] and wt > w and (abs(tip[0] - 2.0) > 0.05 or abs(tip[2] + 3.0) > 0.05)
+    # 出始め: まだ出ていない所は太さ 0 で、一番古い点に重なる
+    rows = mo.wisp_rows(0, 5, v, pts, at, mo.Wind(), (0, 5, 40), (0, 0, -1))
+    born = [r for r in rows if r[2] > 0]
+    assert 0 < len(born) < pts and all(near(r[0], born[-1][0]) for r in rows[len(born):])
+    # 筋ごとに揺れ方が違う
+    a = mo.wisp_point(0, pts - 1, 200, v, pts, at, mo.Wind())[0]
+    b = mo.wisp_point(1, pts - 1, 200, v, pts, at, mo.Wind())[0]
+    assert not near(a, b)
+    assert set(wisp.KIND.rebuild) == set(("count", "points", "style", "texture"))
+
+
+def test_lightning_jag_tapers_toward_end():
+    from dummy_effect_maker import motion as mo
+    from dummy_effect_maker.tools import lightning as lt
+    va = lt.LightningAnimeTool.default_values()
+    assert va["jag_taper"] == 0.3 and lt.LightningRealTool.default_values()["jag_taper"] == 1.0
+    assert "jag_taper" in lt.ANIME.live and "jag_taper" in lt.DISCHARGE_ANIME.live
+    top, gnd = (0.0, 40.0, 0.0), (0.0, 0.0, 0.0)
+    n = 12
+    _, d, a, _ = mo.lightning_frame(top, gnd)
+
+    def sideways(v):
+        out = []
+        for k in range(1, n - 1):
+            p = mo.lightning_main_point(mo.STYLE_ANIME, k, n, 0, v, top, gnd)
+            base = mo.add(top, mo.mul(mo.sub(gnd, top), k / float(n - 1)))
+            out.append(abs(mo.dot(mo.sub(p, base), a)))
+        return out
+
+    flat = sideways(dict(va, jag_taper=1.0))
+    taper = sideways(dict(va, jag_taper=0.3))
+    # 雲の側はほとんど同じ、終端に近いほど小さく (終端の手前で 0.3 + 少し)
+    assert abs(taper[0] / flat[0] - (1 - 0.7 * 1 / 11.0)) < 1e-9
+    assert abs(taper[-1] / flat[-1] - (1 - 0.7 * 10 / 11.0)) < 1e-9
+    assert mo.jag_scale({"jag_taper": 0.0}, 1.0) == 0.0 and mo.jag_scale({}, 0.7) == 1.0
