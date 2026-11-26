@@ -147,12 +147,13 @@ def test_tools_are_grouped_into_tabs():
     assert dict(tabs)[u"爆発"] == [u"爆発 (単体)", u"爆発 (単体) を更新", u"核爆発", u"核爆発を更新"]
     assert dict(tabs)[u"天候"] == [
         u"風", u"風を更新", u"雨 (線と跳ね)", u"雨 (遠景の筒)", u"雪 (粒)", u"雪 (遠景の筒)",
+        u"落ち葉 (舞い散る)", u"落ち葉 (地面の渦)",
         u"土煙 (スプライト)", u"土煙 (もこもこ)", u"細い煙 (たばこ・線香)", u"火花 (線)", u"火花 (尾を引く)",
         u"霧 (霧の板)", u"霧 (遠景の重ね板)", u"地霧 (重ね板)", u"地霧 (這う霧)",
         u"稲妻 (実写)", u"稲妻 (アニメ)", u"放電 (実写)", u"放電 (アニメ)", u"電撃 (実写)", u"電撃 (アニメ)", u"天候を更新"]
     weather_tools = [t for t in tools if t.tab == u"天候"]
     assert [c for c, _ in registry.group_by_category(weather_tools)] == [
-        u"風", u"雨", u"雪", u"土煙", u"煙", u"火花", u"霧", u"地霧", u"稲妻", u"調整"]
+        u"風", u"雨", u"雪", u"落ち葉", u"土煙", u"煙", u"火花", u"霧", u"地霧", u"稲妻", u"調整"]
     assert dict(tabs)[u"お化けブラー"] == [
         u"残像", u"スミア (引き伸ばし)", u"軌跡", u"お化けブラーを更新"]
     assert dict(tabs)[u"衝撃波"] == [u"衝撃波", u"衝撃波を更新"]
@@ -812,7 +813,7 @@ def test_ghost_blur_smear_points():
 
 
 def test_weather_params_are_live_rebuild_or_create():
-    assert len(wx.KINDS) == 24   # (+ スピードライン (トンネル)、電撃 2 つ)
+    assert len(wx.KINDS) == 26   # (+ スピードライン (トンネル)、電撃 2 つ、落ち葉 2 つ)
     # 天候 18 (稲妻・放電 各 2 つ・細い煙を含む) + 核爆発・爆発 (単体)・波打つ布 (同じ仕組み)
     for kind in wx.KINDS.values():
         names = set(p.name for p in kind.tool.params)
@@ -1422,3 +1423,54 @@ def test_presets_cover_every_effect_type():
     # 共通の「パラメータを読み込み」は、全部の種類を作り直せる
     assert all(callable(preset.rebuilder(s.effect_type)) for s in catalog.specs())
     assert preset.PresetSaveTool.hidden and preset.PresetLoadTool.hidden and not preset.PresetSaveTool.undoable
+
+
+def test_leaves_fall_and_karman_vortex():
+    from dummy_effect_maker import motion as mo
+    from dummy_effect_maker.tools import leaves as lv
+    assert lv.color_counts(10) == [4, 3, 3] and sum(lv.color_counts(151)) == 151
+    # 舞い散る: 箱の中を落ち、地面 (箱の底) に着いたら平たく寝て、最後に縮んで消える
+    v = lv.LeafFallTool.default_values()
+    v.update(speed=0.1, speed_random=0.0, ground_frames=40.0, amount=1.0)
+    am = [10.0, 0, 0, 0, 0, 5.0, 0, 0, 0, 0, 10.0, 0, 0, 2.5, 0, 1]   # 幅 10・高さ 5 (底が 0)
+    ai = mo.inverse(am)
+    seen_air = seen_ground = False
+    for f in range(0, 200, 3):
+        p, axes, sz, vis = mo.leaf_fall(0, f, v, am, ai, mo.Wind())
+        assert -5.0 - 1e-6 <= p[0] <= 5.0 + 1e-6 and -1e-6 <= p[1] <= 5.0 + 1e-6
+        assert abs(mo.dot(axes[0], axes[1])) < 1e-9 and abs(mo.mag(axes[2]) - 1) < 1e-9
+        if p[1] < 1e-6:
+            seen_ground = True
+            assert mo.dot(axes[1], (0, 1, 0)) > 1 - 1e-9   # 寝ている
+        elif sz > 0:
+            seen_air = True
+    assert seen_air and seen_ground
+    # 渦: 列ごとに左右交互・回る向きも交互、下流へ流れ、弱まると地面に落ちる
+    vv = lv.LeafVortexTool.default_values()
+    vv.update(start_frame=1.0, shed_interval=10.0, life=60.0, ground_frames=20.0, wander=0.0, size_random=0.0)
+    lanes = mo.vortex_lanes(vv)
+    assert lanes == 8
+    assert mo.leaf_vortex(3, 1 + 3 * 10 - 1, vv)[3] is False          # 自分の渦が出る前は見えない
+    a, b = mo.leaf_vortex(0, 31, vv), mo.leaf_vortex(1, 41, vv)       # 渦 0 と渦 1 (どちらも出て 30 フレーム)
+    assert a[0][2] * b[0][2] < 0                                        # 左右の列
+    assert abs(a[0][2] - vv["row_width"] / 2) < vv["radius"] * 1.2
+    th = []
+    for j in (0, 1):   # 回る向き: 渦の中心から見た角度の進み方の符号が逆
+        def ang(f, j=j):
+            p = mo.leaf_vortex(j, f, vv)[0]
+            k = j % lanes
+            ta = f - 1 - k * 10.0
+            cz = (1 if k % 2 == 0 else -1) * vv["row_width"] / 2
+            return math.atan2(p[2] - cz, p[0] - vv["speed"] * ta)
+        d = ang(1 + j * 10 + 12) - ang(1 + j * 10 + 10)
+        th.append(math.atan2(math.sin(d), math.cos(d)))
+    assert th[0] * th[1] < 0
+    early, late = mo.leaf_vortex(0, 1 + 20, vv), mo.leaf_vortex(0, 1 + 59, vv)
+    assert late[0][0] > early[0][0] and early[0][1] > 0                 # 下流へ・巻き上げる
+    rest = mo.leaf_vortex(0, 1 + 70, vv)
+    assert rest[0][1] == 0 and rest[3] and mo.dot(rest[1][1], (0, 1, 0)) > 1 - 1e-9   # 地面で寝る
+    assert not mo.leaf_vortex(0, 1 + 79.9, vv)[3] or mo.leaf_vortex(0, 1 + 79.9, vv)[2] < 0.05
+    # ロケータの空間 → ワールド
+    m = [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 5, 0, 0, 1]   # Y まわりに 90 度・(5, 0, 0)
+    p, axes = mo.leaf_place(m, (1.0, 0.0, 0.0), mo.leaf_axes(0, 0, 0))
+    assert _close3(p, (5, 0, -1)) and _close3(axes[0], (0, 0, -1)) and _close3(axes[1], (0, 1, 0))

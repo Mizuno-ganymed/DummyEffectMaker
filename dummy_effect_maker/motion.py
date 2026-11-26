@@ -210,6 +210,122 @@ def snow_size(i, v):
     return v["size"] * (1 + (h(i, 0, 8, v["seed"]) - 0.5) * 2 * v["size_random"])
 
 
+# ---------------------------------------------------------------- 落ち葉
+# 葉の形はローカルの XZ 面 (面の向き Y)。X が葉の長さ (先は +X)。
+LEAF_COLORS = 3   # 葉の色の数 (葉 j の色 = j % 3。色ごとに別のメッシュ・マテリアル)
+
+
+def leaf_axes(yaw, rock, roll):
+    """葉の軸 (X: 長さ、Y: 面の向き、Z)。Y 軸まわりに yaw、X まわりに rock、Z まわりに roll 傾ける (ラジアン)。"""
+    x0 = (math.cos(yaw), 0.0, -math.sin(yaw))
+    z0 = (math.sin(yaw), 0.0, math.cos(yaw))
+    y0 = (0.0, 1.0, 0.0)
+    y1 = add(mul(y0, math.cos(rock)), mul(z0, math.sin(rock)))
+    z1 = sub(mul(z0, math.cos(rock)), mul(y0, math.sin(rock)))
+    x2 = add(mul(x0, math.cos(roll)), mul(y1, math.sin(roll)))
+    y2 = sub(mul(y1, math.cos(roll)), mul(x0, math.sin(roll)))
+    return x2, y2, z1
+
+
+def leaf_size(j, v):
+    return v["size"] * (1 + (h(j, 0, 8, v["seed"]) - 0.5) * 2 * v["size_random"])
+
+
+def leaf_fall(j, frame, v, am, ai, wind):
+    """舞い散る落ち葉 j の (位置, 軸, 大きさ, 表示)。_fall_body (Maya) と同じ式。
+
+    範囲の箱の上から、左右に振れながら (振れの端で傾く) 回って落ち、地面 (箱の底) に着いたら
+    「地面に残るフレーム数」だけ平たく寝て、最後に縮んで消える。横は箱の中で回り込む。
+    """
+    sd = v["seed"]
+    a_h = mag((am[4], am[5], am[6]))
+    sp = max(v["speed"] * (1 + (h(j, 0, 1, sd) - 0.5) * 2 * v["speed_random"]), 0.0001)
+    fall = a_h / sp
+    rest = max(v["ground_frames"], 0.0)
+    life = fall + rest
+    u = frame / life + h(j, 0, 2, sd)
+    c = math.floor(u)
+    age = (u - c) * life
+    ts = frame - age
+    ta = min(age, fall)                       # 落ちていた時間 (地面に着いたら止まる)
+    landed = age > fall
+    q = (h(j, c, 3, sd) - 0.5, 0.5, h(j, c, 4, sd) - 0.5)
+    dw = add(mul(sub(wind.drift_at(ts + ta), wind.drift_at(ts)), wind.influence), (0.0, -sp * ta, 0.0))
+    per = max(v["sway_period"], 1.0)
+    ph = TAU * ta / per + TAU * h(j, 0, 5, sd)
+    sdir = TAU * h(j, c, 6, sd)               # 振れる向き
+    sw = v["sway"] * math.sin(ph)
+    dw = add(dw, (sw * math.cos(sdir), 0.0, sw * math.sin(sdir)))
+    q = add(q, xv(ai, dw))
+    q = (math.fmod(q[0] + 1000.5, 1.0) - 0.5, max(q[1], -0.5), math.fmod(q[2] + 1000.5, 1.0) - 0.5)
+    p = xf(am, q)
+    flat = 0.0 if landed else 1.0
+    yaw = -sdir + math.radians(v["spin"]) * ta * (2 * h(j, 0, 9, sd) - 1)
+    rock = math.radians(v["tilt"]) * math.cos(ph) * flat
+    roll = math.radians(v["tilt"]) * 0.4 * math.sin(2 * ph + TAU * h(j, 0, 10, sd)) * flat
+    size = leaf_size(j, v)
+    if landed and rest > 0:                   # 寝ている時間の終わりに縮んで消える
+        k = (age - fall) / rest
+        size *= clamp(0.0, 1.0, (1 - k) / 0.2)
+    vis = h(j, c, 7, sd) < v["amount"] and size > 1e-9
+    return p, leaf_axes(yaw, rock, roll), size, vis
+
+
+def vortex_lanes(v):
+    """渦の列の数 (葉 j は列 j % これ の渦に乗る。1 つの列の渦は、前の渦が消えてから次が出る)。"""
+    shed = max(v["shed_interval"], 0.5)
+    return max(1, int(math.ceil((max(v["life"], 1.0) + max(v["ground_frames"], 0.0)) / shed)))
+
+
+def leaf_vortex(j, frame, v):
+    """地面のカルマン渦に巻かれる葉 j の (位置, 軸, 大きさ, 表示) (出る場所のロケータの空間。X が下流)。
+
+    _vortex_body (Maya) と同じ式。渦は「渦の出る間隔」ごとに左右交互 (Z = ±列の幅 / 2) に出て、
+    回る向きも交互 (カルマン渦列)。渦は下流へ流れながら育ち、だんだん弱まって「渦が消えるまで」で止まる。
+    葉は出た渦に巻き上げられて回り、渦が弱まると地面に落ちて「地面に残るフレーム数」だけ寝て消える。
+    """
+    sd = v["seed"]
+    shed = max(v["shed_interval"], 0.5)
+    lanes = vortex_lanes(v)
+    life = max(v["life"], 1.0)
+    m = j % lanes
+    t = frame - v["start_frame"] - m * shed
+    if t < 0:
+        return (0.0, 0.0, 0.0), IDENTITY, 0.0, False
+    period = lanes * shed
+    n = math.floor(t / period)
+    k = m + lanes * n                       # 乗っている渦の番号
+    a = t - n * period                      # 渦が出てからのフレーム
+    ta = min(a, life)
+    side = 1.0 if k % 2 == 0 else -1.0      # 左右の列
+    turn = -side                            # 回る向き (列ごとに逆)
+    env = (1 - ta / life) * (1 - math.exp(-ta / 6.0))   # 渦の強さ (出てすぐ強まり、消えるまでに弱まる)
+    grow = 1 - math.exp(-ta / max(0.3 * life, 1.0))
+    x = math.sqrt(h(j, k, 11, sd))
+    rho = v["radius"] * (0.2 + 0.9 * x) * (0.55 + 0.45 * grow)
+    w = 1.4 / (0.4 + x)                     # 中心ほど速く回る
+    th = TAU * h(j, k, 12, sd) + turn * math.radians(v["spin"]) * w * (ta - ta * ta / (2 * life))
+    hy = v["lift"] * env * (0.3 + 0.7 * h(j, k, 13, sd)) * (0.75 + 0.25 * math.sin(2 * th + TAU * h(j, k, 14, sd)))
+    cx = v["speed"] * ta + v["wander"] * math.sin(TAU * ta / 90.0 + TAU * h(k, 0, 15, sd))
+    cz = side * v["row_width"] * 0.5
+    p = (cx + rho * math.cos(th), hy, cz + rho * math.sin(th))
+    yaw = -(th + turn * math.pi / 2)
+    rock = math.radians(v["tilt"]) * env * (0.6 + 0.4 * math.sin(3 * th + TAU * h(j, k, 16, sd)))
+    roll = math.radians(v["tilt"]) * 0.5 * env * math.sin(1.7 * th + TAU * h(j, k, 17, sd))
+    size = leaf_size(j, v) * clamp(0.0, 1.0, a / 4.0)
+    tail = min(8.0, period - life)          # 次の渦に乗る前に縮んで消える
+    if tail > 0 and a > period - tail:
+        size *= clamp(0.0, 1.0, (period - a) / tail)
+    return p, leaf_axes(yaw, rock, roll), size, size > 1e-9
+
+
+def leaf_place(m, p, axes):
+    """ロケータの行列 m (Y が上) の空間の (位置, 軸) → ワールド (軸は大きさを除いて直交させる)。"""
+    x = unit(xv(m, axes[0]))
+    y = ortho(x, xv(m, axes[1]))
+    return xf(m, p), (x, y, cross(x, y))
+
+
 # ---------------------------------------------------------------- 出る場所から出るもの
 def spawn(i, frame, v, count, emitter_at, wind):
     """出る場所から出る粒 (土煙・火花) の出た時・場所・向き。_spawn_body と同じ式。"""

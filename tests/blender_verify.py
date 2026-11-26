@@ -1395,6 +1395,74 @@ def b20_electric():
 
 
 @section
+def b21_leaves():
+    from dummy_effect_maker.blender.tools import _wx, leaves as bl, wind as bwind
+    from dummy_effect_maker.tools import leaves as ml
+    from dummy_effect_maker import motion as mo
+    new_scene()
+    cam = scene_camera()
+    select(cam)
+    op(bl.LeafFallTool, count=14, area_width=10.0, area_height=6.0, ground_frames=30.0)
+    root = bpy.data.objects.get("dfx_leaves1")
+    parts = [_wx.part(root, "_leaves%d" % (g + 1)) for g in range(3)]
+    check("落ち葉 (舞い散る): 色ごとに 3 つのメッシュ (5 + 5 + 4 枚)・範囲の箱",
+          [p.data["dfx_count"] for p in parts] == [5, 5, 4] and rt.control(root, "area") is not None
+          and len(set(_wx.material_of(p).name for p in parts)) == 3)
+    area = rt.control(root, "area")
+    area.rotation_euler = (0, 0, math.radians(25))
+    select()
+    op(bwind.WindTool, strength=0.15)
+    check("落ち葉 (舞い散る): 風を作るとつながる", root.get("dfx_wind") == bpy.data.objects.get("dfx_wind1"))
+    v = rt.read_params(root, ml.FALL.stored_params())
+    bad = []
+    for f in (3, 40, 130, 251):
+        bpy.context.scene.frame_set(f)
+        am = _wx.yup(area.matrix_world)
+        ai = mo.inverse(am)
+        wind = _wx.wind_of(root)
+        for g, obj in enumerate(parts):
+            for idx in range(obj.data["dfx_count"]):
+                p, axes, sz, vis = mo.leaf_fall(idx * 3 + g, f, v, am, ai, wind)
+                if not same_particle(obj, idx, (p, axes, (sz,) * 3) if vis else _wx.hidden(p)):
+                    bad.append((f, g, idx))
+    check("落ち葉 (舞い散る): Maya 版と同じ計算 (回した箱・風)", not bad, str(bad[:3]))
+    # 地面の渦
+    post = bpy.data.objects.new("post", None)
+    bpy.context.scene.collection.objects.link(post)
+    post.location = (2, 1, 0)
+    post.rotation_euler = (0, 0, math.radians(40))
+    select(post, cam)
+    op(bl.LeafVortexTool, count=20, shed_interval=8.0, life=40.0, ground_frames=10.0)
+    vroot = bpy.data.objects.get("dfx_leafVortex1")
+    em = rt.control(vroot, "emitter")
+    vparts = [_wx.part(vroot, "_leaves%d" % (g + 1)) for g in range(3)]
+    bpy.context.scene.frame_set(1)
+    check("落ち葉 (地面の渦): 出る場所 (3 軸の矢印) がオブジェクトに付いて動く・風とはつながらない",
+          em.empty_display_type == "ARROWS" and near(em.matrix_world.translation, (2, 1, 0))
+          and vroot.get("dfx_wind") is None)
+    v = rt.read_params(vroot, ml.VORTEX.stored_params())
+    bad, up = [], []
+    for f in (1, 4, 12, 25, 46, 61, 90):
+        bpy.context.scene.frame_set(f)
+        m = _wx.emitter_at(vroot)(f)
+        for g, obj in enumerate(vparts):
+            for idx in range(obj.data["dfx_count"]):
+                p, axes, sz, vis = mo.leaf_vortex(idx * 3 + g, f, v)
+                p, axes = mo.leaf_place(m, p, axes)
+                if vis:
+                    up.append(p[1])
+                if not same_particle(obj, idx, (p, axes, (sz,) * 3) if vis else _wx.hidden(p)):
+                    bad.append((f, g, idx))
+    check("落ち葉 (地面の渦): Maya 版と同じ計算 (回したオブジェクトに付いた出る場所)", not bad and max(up) > 0.2,
+          str((bad[:3], max(up) if up else None)))
+    vroot["dfx_count"] = 9
+    select(vroot)
+    op(bscene.UpdateEffectsTool)
+    check("落ち葉 (地面の渦): 更新で葉の数が変わる",
+          [_wx.part(vroot, "_leaves%d" % (g + 1)).data["dfx_count"] for g in range(3)] == [3, 3, 3])
+
+
+@section
 def b05_delete_all():
     op(bscene.DeleteAllTool)
     check("全削除: ツールで作った物が全部消える (カメラは残る)",
@@ -1407,7 +1475,7 @@ for fn in (b01_register, b02_vulcan, b03_shockwave, b04_export, b05_delete_all, 
            b07_rain_snow, b08_dust_sparks, b09_homing_energy, b10_explosion,
            b11_shakes, b12_export_more, b13_nuke, b14_lightning,
            b15_explosion_single, b16_discharge, b17_wisp,
-           b18_cloth, b19_tunnel_lines, b20_electric):
+           b18_cloth, b19_tunnel_lines, b20_electric, b21_leaves):
     fn()
 fails = [r for r in RESULTS if not r[1]]
 print("\nSUMMARY: %d passed, %d failed" % (len(RESULTS) - len(fails), len(fails)))
