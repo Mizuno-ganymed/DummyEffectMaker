@@ -143,9 +143,8 @@ def test_tools_are_grouped_into_tabs():
     tabs = [(tab, [t.label for t in ts]) for tab, ts in registry.group_by_tab(tools)]
     assert [tab for tab, _ in tabs] == [u"射撃", u"カメラ", u"衝撃波", u"お化けブラー", u"天候", u"爆発", u"布"]
     assert dict(tabs)[u"布"] == [u"波打つ布", u"波打つ布を更新"]
-    assert dict(tabs)[u"爆発"] == [
-        u"コリジョンに指定", u"コリジョンを解除", u"爆発", u"爆発 (単体)", u"爆発を更新", u"爆発を外す",
-        u"核爆発", u"核爆発を更新"]
+    # 爆発タブは単体で起きる爆発だけ (弾が当たって起きる着弾爆発とコリジョンは射撃タブ)
+    assert dict(tabs)[u"爆発"] == [u"爆発 (単体)", u"爆発 (単体) を更新", u"核爆発", u"核爆発を更新"]
     assert dict(tabs)[u"天候"] == [
         u"風", u"風を更新", u"雨 (線と跳ね)", u"雨 (遠景の筒)", u"雪 (粒)", u"雪 (遠景の筒)",
         u"土煙 (スプライト)", u"土煙 (もこもこ)", u"細い煙 (たばこ・線香)", u"火花 (線)", u"火花 (尾を引く)",
@@ -174,9 +173,10 @@ def test_tools_are_grouped_into_tabs():
     assert not any(u"パラメータ" in label for _, labels in tabs + menus for label in labels)
     # 射撃タブ: 追尾弾・バルカン砲・エネルギー弾を項目 (グループ) に分ける
     assert dict(tabs)[u"射撃"] == [
-        u"追尾弾", u"追尾弾を更新", u"バルカン砲", u"バルカン砲を更新", u"エネルギー弾", u"エネルギー弾を更新"]
+        u"追尾弾", u"追尾弾を更新", u"バルカン砲", u"バルカン砲を更新", u"エネルギー弾", u"エネルギー弾を更新",
+        u"コリジョンに指定", u"コリジョンを解除", u"着弾爆発", u"着弾爆発を更新", u"着弾爆発を外す"]
     shooting = [t for t in tools if t.tab == u"射撃" and not t.hidden]
-    assert [c for c, _ in registry.group_by_category(shooting)] == [u"追尾弾", u"バルカン砲", u"エネルギー弾"]
+    assert [c for c, _ in registry.group_by_category(shooting)] == [u"追尾弾", u"バルカン砲", u"エネルギー弾", u"着弾爆発"]
 
 
 def test_menu_tools_are_not_in_tabs():

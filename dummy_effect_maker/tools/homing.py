@@ -356,10 +356,10 @@ def build_effect(cmds, mu, root, frames, v, locators):
             cmds, bullet, curve_shape, fire, fire + travel,
             "%s_motion_%03d" % (prefix, i + 1))
         keys = travel_keys(v["speed_mode"], min_ratio, fire, travel)
-        u_curve = _key_travel(cmds, motion_path, keys, template)
+        u_curve, relay = _key_travel(cmds, motion_path, keys, template)
         if template is None:
             template = (u_curve, fire)
-        owned.extend([motion_path, u_curve])
+        owned.extend([motion_path, u_curve, relay])
 
         # 発射フレームで出現し、着弾の次のフレームで消える。
         # shape=False: 既定ではシェイプの visibility にもキーが入り、
@@ -472,23 +472,28 @@ def _attach_motion_path(cmds, bullet, curve_shape, start, end, name):
 
 
 def _key_travel(cmds, mp, keys, template):
-    """mp.uValue に進み具合のキーを打ち、そのアニメーションカーブを返す。
+    """進み具合のキーのアニメーションカーブを作り、中継ノードを通して mp.uValue につなぐ。
 
-    template (1 発目のカーブ) があれば複製して時間をずらすだけにする
+    (カーブ, 中継ノード) を返す。template (1 発目のカーブ) があれば複製して時間をずらすだけにする
     (減速ありはキーが多いので、弾ごとに打つと遅い)。
+    アニメーションカーブを uValue に直接つなぐと、Maya がキーごとに軌道カーブ上に位置マーカー
+    (フレーム番号) を作る (減速ありは 1 フレームに 4 キーで数字が並ぶ)。中継ノード (addDoubleLinear)
+    を挟むとマーカーはできない。マーカーを後から隠す (setAttr) と、リドゥで Maya が落ちる。
     """
     if template is None:
+        curve = cmds.createNode("animCurveTU", name=mp + "_uValue")
         for t, u in keys:
-            cmds.setKeyframe(mp, attribute="uValue", time=t, value=u,
-                             inTangentType="linear", outTangentType="linear")
-        return cmds.listConnections(mp + ".uValue", source=True, destination=False)[0]
-    template_curve, template_start = template
-    curve = cmds.duplicate(template_curve, name=mp + "_uValue")[0]
-    offset = keys[0][0] - template_start
-    if offset:
-        cmds.keyframe(curve, edit=True, relative=True, timeChange=offset)
-    cmds.connectAttr(curve + ".output", mp + ".uValue")
-    return curve
+            cmds.setKeyframe(curve, time=t, value=u, inTangentType="linear", outTangentType="linear")
+    else:
+        template_curve, template_start = template
+        curve = cmds.duplicate(template_curve, name=mp + "_uValue")[0]
+        offset = keys[0][0] - template_start
+        if offset:
+            cmds.keyframe(curve, edit=True, relative=True, timeChange=offset)
+    relay = cmds.createNode("addDoubleLinear", name=mp + "_uRelay")
+    cmds.connectAttr(curve + ".output", relay + ".input1")
+    cmds.connectAttr(relay + ".output", mp + ".uValue")
+    return curve, relay
 
 
 def _build_path(cmds, plugs, smooth, prefix, root, owned):

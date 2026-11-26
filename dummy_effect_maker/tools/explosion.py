@@ -4,9 +4,9 @@
 使い方:
     1. ぶつける相手のモデル (ローポリで自由にモデリングしてよい。複数可) を選んで「コリジョンに指定」
        移動・回転・拡大縮小のアニメーションをしていてよい (変形するメッシュは作成時の形で判定)
-    2. 追尾弾・バルカン砲・エネルギー弾 (ルートか、その中の弾) を選んで「爆発」
+    2. 追尾弾・バルカン砲・エネルギー弾 (ルートか、その中の弾) を選んで「着弾爆発」
        弾の通り道を 1 フレームを細かく分けてたどり、最初に当たった所で爆発する。当たった弾は消える
-    3. 弾やコリジョンを動かした・アニメーションを変えたら「爆発を更新」(当たる所を計算し直す)
+    3. 弾やコリジョンを動かした・アニメーションを変えたら「着弾爆発を更新」(当たる所を計算し直す)
 
 構成:
     dfx_explosionN        ルート (パラメータ。弾のルートと「dfx_source」でつながる)
@@ -26,7 +26,9 @@ from ..core import BaseTool, Param, ToolError
 from . import _weather as wx
 
 EFFECT_TYPE = "explosion"
-TAB = u"爆発"
+TAB = u"爆発"            # 爆発タブ (爆発 (単体)・核爆発)
+SHOOT_TAB = u"射撃"      # 着弾爆発とコリジョンは射撃タブ (弾が当たって起きる爆発)
+SHOOT_CATEGORY = u"着弾爆発"
 BULLET_TYPES = ("homing", "vulcan", "energy_ball")
 COLLIDER_ATTR = "dfxCollider"
 SOURCE_ATTR = "dfx_source"
@@ -101,8 +103,8 @@ def _explosion_params():
 
 class ColliderSetTool(BaseTool):
     label = u"コリジョンに指定"
-    tab = TAB
-    category = u"コリジョン"
+    tab = SHOOT_TAB
+    category = SHOOT_CATEGORY
     order = 902
     tooltip = (u"選択したモデルを、弾がぶつかるコリジョンにします (複数可。グループなら中のメッシュ全部)。\n"
                u"ローポリで自由にモデリングしてよく、移動・回転・拡大縮小のアニメーションにも対応します。")
@@ -115,15 +117,15 @@ class ColliderSetTool(BaseTool):
                 cmds.addAttr(node, longName=COLLIDER_ATTR, attributeType="bool", defaultValue=True)
             cmds.setAttr(node + "." + COLLIDER_ATTR, True)
             ctx.log(u"  %s をコリジョンにしました" % wx.short(node))
-        ctx.log(u"  弾 (追尾弾・バルカン砲・エネルギー弾) を選んで「爆発」(作成済みなら「爆発を更新」) を押すと当たりを計算します。"
-                u"放電は、放電を選んで「爆発を更新」で当たりを計算し直します")
+        ctx.log(u"  弾 (追尾弾・バルカン砲・エネルギー弾) を選んで「着弾爆発」(作成済みなら「着弾爆発を更新」) を押すと当たりを計算します。"
+                u"放電は、放電を選んで「天候を更新」で当たりを計算し直します")
         return nodes
 
 
 class ColliderClearTool(BaseTool):
     label = u"コリジョンを解除"
-    tab = TAB
-    category = u"コリジョン"
+    tab = SHOOT_TAB
+    category = SHOOT_CATEGORY
     order = 903
     tooltip = u"選択したモデルをコリジョンから外します (何も選ばなければシーンの全部)。"
 
@@ -143,13 +145,13 @@ class ColliderClearTool(BaseTool):
 
 
 class ExplosionTool(BaseTool):
-    label = u"爆発"
-    tab = TAB
-    category = u"爆発"
+    label = u"着弾爆発"
+    tab = SHOOT_TAB
+    category = SHOOT_CATEGORY
     order = 904
     tooltip = (u"選択した追尾弾・バルカン砲・エネルギー弾が、コリジョンに当たった所で爆発します。\n"
                u"当たった弾は消えます。閃光・衝撃波の輪・火の玉・煙・火花の大きさや色は後から変えられます。\n"
-               u"弾やコリジョンを動かしたら「爆発を更新」で当たりを計算し直します。")
+               u"弾やコリジョンを動かしたら「着弾爆発を更新」で当たりを計算し直します。")
     params = _explosion_params()
 
     def run(self, ctx, **v):
@@ -187,9 +189,9 @@ class ExplosionTool(BaseTool):
 
 
 class ExplosionUpdateTool(BaseTool):
-    label = u"爆発を更新"
-    tab = TAB
-    category = u"爆発"
+    label = u"着弾爆発を更新"
+    tab = SHOOT_TAB
+    category = SHOOT_CATEGORY
     order = 906
     tooltip = (u"選択した爆発 (または弾) の当たりを計算し直して作り直します (爆発 (単体) も作り直します)。\n"
                u"弾・コリジョンを動かした時や、「(更新)」の付いた項目 (数など) を変えた時に使います。")
@@ -212,9 +214,9 @@ class ExplosionUpdateTool(BaseTool):
 
 
 class ExplosionRemoveTool(BaseTool):
-    label = u"爆発を外す"
-    tab = TAB
-    category = u"爆発"
+    label = u"着弾爆発を外す"
+    tab = SHOOT_TAB
+    category = SHOOT_CATEGORY
     order = 907
     tooltip = u"選択した爆発を削除し、当たって消えていた弾を元に戻します。"
 
@@ -247,7 +249,7 @@ def _has_bullets(cmds, mu):
 def rebuild_discharges(cmds, mu, ctx):
     """選んだ放電の、終端の側がコリジョンに当たる所と爆発を計算し直す。作り直した放電を返す。
 
-    放電は自分の中に爆発を持っているので、「爆発」「爆発を更新」のどちらで押しても同じ。
+    放電は自分の中に爆発を持っているので、「着弾爆発」「着弾爆発を更新」のどちらで押しても同じ。
     """
     roots = [r for r in mu.selected_effect_roots()
              if cmds.getAttr(r + "." + mu.EFFECT_TYPE_ATTR) in _discharge_types()]

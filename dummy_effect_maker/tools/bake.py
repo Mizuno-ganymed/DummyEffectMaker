@@ -22,7 +22,8 @@ EXPRESSION_BAKE_NODE_TYPES = ("surfaceShader", "lattice", "file", "place2dTextur
 # ベイク後に不要になる (動きを作っていた) ノードの種類
 RIG_NODE_TYPES = ("motionPath", "condition", "multiplyDivide", "plusMinusAverage",
                   "decomposeMatrix", "polySphere", "parentConstraint",
-                  "expression", "multMatrix")
+                  "expression", "multMatrix",
+                  "addDoubleLinear", "addDL")   # 追尾弾の進み具合の中継 (Maya 2027 では種類名が addDL)
 
 
 class BakeTool(BaseTool):

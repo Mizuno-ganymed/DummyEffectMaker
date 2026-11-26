@@ -3,9 +3,9 @@
 
 Maya 版 (tools/explosion.py) と同じパラメータ・同じ計算 (当たり判定の考え方と motion.py)。
     1. ぶつける相手のメッシュ (複数可。動く・回る・拡大縮小するアニメーション可) を選んで「コリジョンに指定」
-    2. 弾 (ルートか、その中の物) を選んで「爆発」。弾の通り道を 1 フレームを細かく分けてたどり、
+    2. 弾 (ルートか、その中の物) を選んで「着弾爆発」。弾の通り道を 1 フレームを細かく分けてたどり、
        最初に当たった所で爆発する。当たった弾は消える
-    3. 弾やコリジョンを動かしたら「爆発を更新」(当たる所を計算し直す)
+    3. 弾やコリジョンを動かしたら「着弾爆発を更新」(当たる所を計算し直す)
 
     dfx_explosionN             ルート (パラメータ。dfx_source = 弾のルート、当たりの表 dfxHits)
       dfx_explosionN_flashes   閃光 / _rings 衝撃波の輪 / _fire 火の玉 / _smoke 煙 / _sparks 火花
@@ -27,7 +27,7 @@ PARTS = ("flashes", "rings", "fire", "smoke", "sparks")
 
 
 def _tool(maya_tool, order):
-    return dict(label=maya_tool.label, tab=mx.TAB, category=maya_tool.category, order=order,
+    return dict(label=maya_tool.label, tab=maya_tool.tab, category=maya_tool.category, order=order,
                 hosts=("blender",), params=maya_tool.params)
 
 
@@ -60,8 +60,8 @@ class ColliderSetTool(BaseTool):
         for o in objs:
             o[COLLIDER_KEY] = True
             ctx.log(u"  %s をコリジョンにしました" % o.name)
-        ctx.log(u"  弾 (追尾弾・バルカン砲・エネルギー弾) を選んで「爆発」(作成済みなら「爆発を更新」) を押すと当たりを計算します。"
-                u"放電は、放電を選んで「爆発を更新」で当たりを計算し直します")
+        ctx.log(u"  弾 (追尾弾・バルカン砲・エネルギー弾) を選んで「着弾爆発」(作成済みなら「着弾爆発を更新」) を押すと当たりを計算します。"
+                u"放電は、放電を選んで「エフェクトを更新」で当たりを計算し直します")
         return [o.name for o in objs]
 
 

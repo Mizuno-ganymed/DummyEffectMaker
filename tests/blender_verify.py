@@ -80,6 +80,12 @@ def b01_register():
     check("登録: 射撃タブに追尾弾・バルカン砲・エネルギー弾 (項目ごと)",
           [c for _, c in shooting if _ in (u"追尾弾", u"バルカン砲", u"エネルギー弾")] == [u"追尾弾", u"バルカン砲", u"エネルギー弾"]
           and not [t for t in ui._TOOLS if t.tab in (u"ツール", u"エネルギー弾")], str(shooting))
+    tabs = dict((t.label, (t.tab, t.category)) for t in ui._TOOLS)
+    check("登録: 着弾爆発とコリジョンは射撃タブ、爆発 (単体)・核爆発は爆発タブ",
+          all(tabs.get(l) == (u"射撃", u"着弾爆発") for l in
+              (u"コリジョンに指定", u"コリジョンを解除", u"着弾爆発", u"着弾爆発を更新", u"着弾爆発を外す"))
+          and tabs[u"爆発 (単体)"][0] == u"爆発" and tabs[u"核爆発"][0] == u"爆発",
+          str(dict((k, x) for k, x in tabs.items() if u"爆発" in k or u"コリジョン" in k)))
     check("登録: ホストは blender", __import__("dummy_effect_maker.core.host", fromlist=["x"]).detect().name == "blender")
     ops = [ui.operator_idname(t) for t in ui._TOOLS]
     check("登録: オペレーターができる", all(hasattr(getattr(bpy.ops, o.split(".")[0]), o.split(".")[1]) for o in ops))

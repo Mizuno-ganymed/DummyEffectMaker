@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """爆発 (単体): コリジョンも弾も無しで、置いた所 (爆心のロケータ) で起きる爆発。
 
-部品と動きは「爆発」(コリジョンに当たった所で起きる方) と同じ:
+部品と動きは「着弾爆発」(弾がコリジョンに当たった所で起きる方。射撃タブ) と同じ:
     閃光・衝撃波の輪・火の玉・煙・火花
 当たった所・面の向きの代わりに、爆心のロケータ (_center) の位置と上 (Y) の向きを使う。
 起きるフレームは「開始フレーム」。ロケータを動かす・回す・キーを打つと、すぐ付いてくる。
@@ -14,7 +14,7 @@
 """
 from __future__ import absolute_import
 
-from ..core import BaseTool, Param
+from ..core import BaseTool, Param, ToolError
 from . import _weather as wx
 from . import explosion as ex
 
@@ -42,13 +42,30 @@ class ExplosionSingleTool(BaseTool):
     order = 905
     tooltip = (u"コリジョンも弾も無しで、爆心のロケータの所で起きる爆発を作ります (閃光・衝撃波の輪・火の玉・煙・火花)。\n"
                u"オブジェクトを選んでいればその位置に置きます。ロケータの上 (Y) の向きに広がります。\n"
-               u"起きるフレームは「開始フレーム」。数を変えたら「爆発を更新」を押します。")
+               u"起きるフレームは「開始フレーム」。数を変えたら「爆発 (単体) を更新」を押します。")
     params = _params()
 
     def run(self, ctx, **v):
         from maya import cmds
         from . import _maya_utils as mu
         return wx.create_effect(cmds, mu, ctx, v, KIND)
+
+
+class ExplosionSingleUpdateTool(BaseTool):
+    label = u"爆発 (単体) を更新"
+    tab = TAB
+    category = CATEGORY
+    order = 906
+    tooltip = (u"選択した爆発 (単体) を、ルートのアトリビュートの値で作り直します。\n"
+               u"「(更新)」の付いた項目 (火の玉・煙・火花の数) を変えた時に使います。爆心のロケータはそのまま。")
+
+    def run(self, ctx, **v):
+        from maya import cmds
+        from . import _maya_utils as mu
+        roots = selected(cmds, mu)
+        if not roots:
+            raise ToolError(u"更新する爆発 (単体) (dfx_burstN、またはその中の物) を選択してください")
+        return wx.rebuild_effects(cmds, mu, ctx, roots)
 
 
 def selected(cmds, mu):
