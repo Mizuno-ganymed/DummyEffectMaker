@@ -76,6 +76,10 @@ def b01_register():
     check("登録: バルカン砲・衝撃波・シーンのツール",
           set([u"バルカン砲", u"衝撃波", u"エフェクトを更新", u"ダミーエフェクトを全削除", u"書き出し (Unreal 用)"])
           <= set(labels), str(labels))
+    shooting = [(t.label, t.category) for t in ui._TOOLS if t.tab == u"射撃"]
+    check("登録: 射撃タブに追尾弾・バルカン砲・エネルギー弾 (項目ごと)",
+          [c for _, c in shooting if _ in (u"追尾弾", u"バルカン砲", u"エネルギー弾")] == [u"追尾弾", u"バルカン砲", u"エネルギー弾"]
+          and not [t for t in ui._TOOLS if t.tab in (u"ツール", u"エネルギー弾")], str(shooting))
     check("登録: ホストは blender", __import__("dummy_effect_maker.core.host", fromlist=["x"]).detect().name == "blender")
     ops = [ui.operator_idname(t) for t in ui._TOOLS]
     check("登録: オペレーターができる", all(hasattr(getattr(bpy.ops, o.split(".")[0]), o.split(".")[1]) for o in ops))
@@ -1313,6 +1317,78 @@ def b19_tunnel_lines():
 
 
 @section
+def b20_electric():
+    from dummy_effect_maker.blender.tools import _wx, electric as be
+    from dummy_effect_maker.tools import electric as me
+    from dummy_effect_maker import motion as mo
+    new_scene()
+    cam = scene_camera(loc=(0, -20, 3))
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=1.0, location=(2, 0, 1))
+    ball = bpy.context.active_object
+    ball.scale = (2.0, 1.0, 1.0)
+    ball.rotation_euler = (0.0, 0.0, math.radians(30))
+    ball.keyframe_insert("location", frame=1)
+    ball.location.x = 8
+    ball.keyframe_insert("location", frame=60)
+    for tool, kind, name in ((be.ElectricAnimeTool, me.ANIME, "dfx_electricAnime1"),
+                             (be.ElectricRealTool, me.REAL, "dfx_electric1")):
+        select(ball, cam)
+        op(tool, count=5)
+        root = bpy.data.objects.get(name)
+        center = rt.control(root, "center")
+        bolt, glow = _wx.part(root, "_bolt"), _wx.part(root, "_glow")
+        v = rt.read_params(root, kind.stored_params())
+        n, count = int(v["segments"]), int(v["count"])
+        style = me.STYLES[kind.effect_type]
+        bpy.context.scene.frame_set(30)
+        ok = all(near(center.matrix_world.col[k].xyz, ball.matrix_world.col[k].xyz, 1e-4) for k in range(4))
+        check(u"%s: 作成 (中心はオブジェクトに付いて動き、大きさを合わせる・帯 2 本)" % tool.label,
+              ok and bolt.data["dfx_count"] == mo.strand_rows(style, n) * count and glow is not None
+              and root.get("dfx_camera") == cam, str([tuple(c) for c in center.matrix_world.col]))
+        for mode in mo.ELECTRIC_MODES:
+            root["dfx_mode"] = mode
+            v = rt.read_params(root, kind.stored_params())
+            bad, lit = [], 0
+            for f in (1, 2, 5, 17, 33, 60, 61):
+                bpy.context.scene.frame_set(f)
+                cp, cdir = _wx.camera_yup(root)
+                c, axes = be.center_yup(center)
+                rows = mo.electric_rows(style, f, v, c, axes, cp, cdir, count, n)
+                lit += any(w > 0 for _, _, w in rows)
+                for j, (p, ax, w) in enumerate(rows):
+                    pl = (p, ax, (w,) * 3) if w > 1e-9 else _wx.hidden(p)
+                    if not same_particle(bolt, j, pl) or not same_particle(glow, j, pl):
+                        bad.append((f, j))
+                        break
+            check(u"%s (%s): Maya 版と同じ形・太さ (動くオブジェクト)" % (tool.label, mode),
+                  v["mode"] == mode and not bad and lit == 6, str((bad[:3], lit)))
+    # まとわりつく: 中心の Empty の空間で、点は球 (まとわる半径) の外側にある
+    root = bpy.data.objects.get("dfx_electricAnime1")
+    root["dfx_mode"] = mo.ELECTRIC_CLING
+    bpy.context.scene.frame_set(20)
+    center = rt.control(root, "center")
+    inv = center.matrix_world.inverted()
+    bolt = _wx.part(root, "_bolt")
+    v = rt.read_params(root, me.ANIME.stored_params())
+    rads = [(inv @ Vector(p)).length for j in range(bolt.data["dfx_count"]) for p in _wx.read_particle(bolt, j)
+            if particle_size(bolt, j) > 1e-9]
+    check("電撃: まとわりつく線は、オブジェクトのまわりの球の近くにある",
+          rads and min(rads) > v["radius"] - 0.3 and max(rads) < v["radius"] * 2, str((min(rads), max(rads))))
+    root["dfx_count"] = 3
+    select(root)
+    op(bscene.UpdateEffectsTool)
+    check("電撃: 更新で本数が変わる (中心はそのまま)",
+          _wx.part(root, "_bolt").data["dfx_count"] == mo.strand_rows(mo.STYLE_ANIME, int(v["segments"])) * 3
+          and rt.control(root, "center") is not None and rt.control(root, "center").constraints)
+    # オブジェクトを選ばずに作る
+    select(cam)
+    op(be.ElectricRealTool)
+    lone = bpy.data.objects.get("dfx_electric2")
+    check("電撃: オブジェクトなしでも作れる (中心は (0, 0, 1))",
+          lone is not None and near(rt.control(lone, "center").matrix_world.translation, (0, 0, 1)))
+
+
+@section
 def b05_delete_all():
     op(bscene.DeleteAllTool)
     check("全削除: ツールで作った物が全部消える (カメラは残る)",
@@ -1325,7 +1401,7 @@ for fn in (b01_register, b02_vulcan, b03_shockwave, b04_export, b05_delete_all, 
            b07_rain_snow, b08_dust_sparks, b09_homing_energy, b10_explosion,
            b11_shakes, b12_export_more, b13_nuke, b14_lightning,
            b15_explosion_single, b16_discharge, b17_wisp,
-           b18_cloth, b19_tunnel_lines):
+           b18_cloth, b19_tunnel_lines, b20_electric):
     fn()
 fails = [r for r in RESULTS if not r[1]]
 print("\nSUMMARY: %d passed, %d failed" % (len(RESULTS) - len(fails), len(fails)))

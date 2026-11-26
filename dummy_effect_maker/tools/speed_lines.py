@@ -240,42 +240,6 @@ class SpeedLinesUpdateTool(BaseTool):
         return rebuild_effects(cmds, mu, ctx, _selected_roots(mu, u"更新する"))
 
 
-class SpeedLinesSavePresetTool(BaseTool):
-    label = u"スピードラインのパラメータを保存"
-    tab = TAB
-    category = CATEGORY
-    order = 632
-    undoable = False  # シーンは変えない
-    tooltip = (u"選択したスピードラインのパラメータ (ルートのアトリビュート) を\n"
-               u"プリセットファイル (.json) に保存します。中央の四角の位置・回転・大きさは含みません。")
-
-    def run(self, ctx, **v):
-        from . import _maya_utils as mu
-
-        roots = _selected_roots(mu, u"保存する")
-        return mu.save_preset_dialog(ctx, roots, EFFECT_TYPE, stored_params(),
-                                     self.label, u"スピードライン")
-
-
-class SpeedLinesLoadPresetTool(BaseTool):
-    label = u"スピードラインのパラメータを読み込み"
-    tab = TAB
-    category = CATEGORY
-    order = 634
-    tooltip = (u"プリセットファイル (.json) のパラメータを選択したスピードラインに設定し、\n"
-               u"作り直します (複数選択可。中央の四角はそのまま)。")
-
-    def run(self, ctx, **v):
-        from maya import cmds
-        from . import _maya_utils as mu
-
-        roots = _selected_roots(mu, u"読み込み先の")
-        values = mu.load_preset_dialog(ctx, EFFECT_TYPE, stored_params(), self.label)
-        if values is None:
-            return None
-        return rebuild_effects(cmds, mu, ctx, roots, overrides=values)
-
-
 # ---------------------------------------------------------------- 構築
 def stored_params():
     by_name = dict((p.name, p) for p in SpeedLinesTool.params)

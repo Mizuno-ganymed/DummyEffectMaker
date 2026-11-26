@@ -316,49 +316,6 @@ class GhostBlurUpdateTool(BaseTool):
         return rebuild_effects(cmds, mu, ctx, selected_roots(cmds, mu, u"更新する"))
 
 
-class GhostBlurSavePresetTool(BaseTool):
-    label = u"お化けブラーのパラメータを保存"
-    tab = TAB
-    category = CATEGORY_EDIT
-    order = 862
-    undoable = False
-    tooltip = u"選択したお化けブラー 1 つのパラメータをプリセットファイル (.json) に保存します。"
-
-    def run(self, ctx, **v):
-        from maya import cmds
-        from . import _maya_utils as mu
-
-        roots = selected_roots(cmds, mu, u"保存する")
-        if len(roots) > 1:
-            raise ToolError(u"保存するお化けブラーを 1 つだけ選択してください (現在 %d 個)" % len(roots))
-        kind = kind_of(cmds, mu, roots[0])
-        return mu.save_preset_dialog(ctx, roots, kind.effect_type, kind.stored_params(),
-                                     self.label, kind.noun)
-
-
-class GhostBlurLoadPresetTool(BaseTool):
-    label = u"お化けブラーのパラメータを読み込み"
-    tab = TAB
-    category = CATEGORY_EDIT
-    order = 864
-    tooltip = (u"プリセットファイル (.json) のパラメータを選択したお化けブラーに設定し、作り直します。\n"
-               u"同じ種類 (残像・スミア・軌跡) のプリセットだけ読み込めます。")
-
-    def run(self, ctx, **v):
-        from maya import cmds
-        from . import _maya_utils as mu
-
-        roots = selected_roots(cmds, mu, u"読み込み先の")
-        kinds = set(kind_of(cmds, mu, r).effect_type for r in roots)
-        if len(kinds) > 1:
-            raise ToolError(u"読み込み先は同じ種類 (残像・スミア・軌跡のどれか) だけ選択してください")
-        kind = KINDS[kinds.pop()]
-        values = mu.load_preset_dialog(ctx, kind.effect_type, kind.stored_params(), self.label)
-        if values is None:
-            return None
-        return rebuild_effects(cmds, mu, ctx, roots, overrides=values)
-
-
 # ---------------------------------------------------------------- 種類
 class Kind(object):
     def __init__(self, effect_type, tool, root_name, noun, live, rebuild, build,

@@ -19,7 +19,7 @@ from . import _build as bd, _bullets as _bl
 
 class VulcanTool(BaseTool):
     label = mv.VulcanTool.label
-    tab = u"ツール"
+    tab = mv.TAB
     category = mv.CATEGORY
     order = 20
     hosts = ("blender",)

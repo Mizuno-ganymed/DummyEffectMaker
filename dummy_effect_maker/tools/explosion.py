@@ -228,38 +228,6 @@ class ExplosionRemoveTool(BaseTool):
         return len(roots)
 
 
-class ExplosionSavePresetTool(BaseTool):
-    label = u"爆発のパラメータを保存"
-    tab = TAB
-    category = u"爆発"
-    order = 908
-    undoable = False
-    tooltip = u"選択した爆発 1 つのパラメータをプリセットファイル (.json) に保存します。"
-
-    def run(self, ctx, **v):
-        from maya import cmds
-        from . import _maya_utils as mu
-        return mu.save_preset_dialog(ctx, selected_roots(cmds, mu, u"保存する"), EFFECT_TYPE,
-                                     stored_params(), self.label, u"爆発")
-
-
-class ExplosionLoadPresetTool(BaseTool):
-    label = u"爆発のパラメータを読み込み"
-    tab = TAB
-    category = u"爆発"
-    order = 909
-    tooltip = u"プリセットファイル (.json) のパラメータを選択した爆発に設定し、作り直します。"
-
-    def run(self, ctx, **v):
-        from maya import cmds
-        from . import _maya_utils as mu
-        roots = selected_roots(cmds, mu, u"読み込み先の")
-        values = mu.load_preset_dialog(ctx, EFFECT_TYPE, stored_params(), self.label)
-        if values is None:
-            return None
-        return rebuild_effects(cmds, mu, ctx, roots, overrides=values)
-
-
 # ---------------------------------------------------------------- 選択・つながり
 def stored_params():
     by_name = dict((p.name, p) for p in ExplosionTool.params)

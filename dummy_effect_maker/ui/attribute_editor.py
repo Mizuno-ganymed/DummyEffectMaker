@@ -6,6 +6,7 @@
     - 「(更新)」の物は、変えたら下の「更新」ボタンで作り直す
     - 右の ◆ でキーを打つ / 消す (色: 赤 = このフレームにキー、桃 = キーあり、黄 = エクスプレッションなどで決まる)
     - 動かす物 (範囲の箱・出る場所・爆心など) とつながった物 (カメラ・風) は、ボタンで選べる
+    - 上の「保存」「読み込み」で、パラメータをプリセット (.json) に保存・読み込みする (全部の種類で共通)
 
 Maya とのやり取りは backend (tools/_attr_backend.py の MayaAttributeBackend) に任せる。
 """
@@ -27,12 +28,17 @@ LOCKED_TEXT = u"🔒 ロック中"
 
 
 class AttributeEditor(QtWidgets.QWidget):
-    """backend: MayaAttributeBackend など。run_update(effect_type, root): 「更新」ボタンで呼ぶ。"""
+    """backend: MayaAttributeBackend など。
 
-    def __init__(self, backend, run_update=None, parent=None):
+    run_update(effect_type, root): 「更新」ボタンで呼ぶ。
+    run_preset(action): 「保存」(action = "save") /「読み込み」("load") で呼ぶ (対象のルートは選択済み)。
+    """
+
+    def __init__(self, backend, run_update=None, run_preset=None, parent=None):
         super(AttributeEditor, self).__init__(parent)
         self.backend = backend
         self.run_update = run_update
+        self.run_preset = run_preset
         self.root = None
         self.effect_type = None
         self.spec = None
@@ -47,6 +53,15 @@ class AttributeEditor(QtWidgets.QWidget):
         self.lock_button.setCheckable(True)
         self.lock_button.setToolTip(u"ロックすると、選択を外したり変えたりしても、このエフェクトを表示し続けます")
         self.lock_button.toggled.connect(self.set_locked)
+        self.save_button = QtWidgets.QPushButton(u"保存")
+        self.save_button.setToolTip(u"このエフェクトのパラメータを、プリセットファイル (.json) に保存します")
+        self.save_button.clicked.connect(self._on_save)
+        self.load_button = QtWidgets.QPushButton(u"読み込み")
+        self.load_button.setToolTip(
+            u"プリセットファイル (.json) のパラメータを設定して作り直します (同じ種類のプリセットだけ)。\n"
+            u"同じ種類のエフェクトを複数選んでいれば、全部に読み込みます (ロック中は表示中の 1 つだけ)。\n"
+            u"キーを打ってある項目は変えません")
+        self.load_button.clicked.connect(self._on_load)
         self.header = QtWidgets.QLabel()
         self.header.setWordWrap(True)
         font = self.header.font()
@@ -80,6 +95,8 @@ class AttributeEditor(QtWidgets.QWidget):
         self.panel.setObjectName(PANEL_NAME)
         top = QtWidgets.QHBoxLayout()
         top.addWidget(self.header, 1)
+        top.addWidget(self.save_button)
+        top.addWidget(self.load_button)
         top.addWidget(self.lock_button)
         inner = QtWidgets.QVBoxLayout(self.panel)
         inner.setContentsMargins(6, 6, 6, 6)
@@ -143,6 +160,12 @@ class AttributeEditor(QtWidgets.QWidget):
             self.lock_button.setText(LOCK_TEXT)
             self.lock_button.setStyleSheet("")
         self.lock_button.setEnabled(self.root is not None or self.is_locked())
+        self._apply_preset_buttons()
+
+    def _apply_preset_buttons(self):
+        can = self.root is not None and self.spec is not None and self.run_preset is not None
+        self.save_button.setEnabled(can)
+        self.load_button.setEnabled(can and not self._baked)
 
     # ------------------------------------------------------------ 表示
     def show_empty(self, text=EMPTY_TEXT):
@@ -354,6 +377,34 @@ class AttributeEditor(QtWidgets.QWidget):
         self.flush()
         self.backend.toggle_key(self.root, p)
         self._sync_keys()
+
+    # ------------------------------------------------------------ 保存・読み込み
+    def preset_targets(self):
+        """読み込み先: ロック中は表示中の 1 つ、そうでなければ選んでいる同じ種類のエフェクト全部。"""
+        if self.root is None:
+            return []
+        if self.is_locked():
+            return [self.root]
+        roots = [r for r in self.backend.selected_roots() if self.backend.describe(r)[0] == self.effect_type]
+        return roots if self.root in roots else [self.root]
+
+    def _on_save(self):
+        if self.root is None or self.run_preset is None:
+            return
+        self.flush()
+        self.backend.select([self.root])
+        self.run_preset("save")
+
+    def _on_load(self):
+        if self.root is None or self.run_preset is None:
+            return
+        self.flush()
+        self.backend.select(self.preset_targets())
+        self.run_preset("load")
+        self._pending_rebuild = False
+        self.update_button.setStyleSheet("")
+        self.root = None   # 作り直した後は、もう一度読み直す
+        self.refresh()
 
     def _on_update(self):
         if self.root is None or self.run_update is None:

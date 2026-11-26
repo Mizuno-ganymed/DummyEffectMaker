@@ -62,6 +62,12 @@ def build(root, v):
     n, m, nb = int(v["segments"]), int(v["branch_segments"]), int(v["branches"])
     style = ml.STYLES[root.get(rt.TYPE_KEY)]
     strands = [mo.strand_rows(style, n)] + [mo.strand_rows(style, m)] * nb   # 帯の行の数 (アニメは細かく分ける)
+    for obj in strand_objects(root, v, style, strands):
+        obj.data["dfx_strands"] = [n, nb, m]
+
+
+def strand_objects(root, v, style, strands):
+    """点の列 (strands = 各列の行の数) の帯 _bolt / _glow (電撃も使う)。"""
     faces = []
     k = 0
     for count in strands:
@@ -69,9 +75,9 @@ def build(root, v):
             faces.append((2 * (k + j), 2 * (k + j) + 1, 2 * (k + j) + 3, 2 * (k + j) + 2))
         k += count
     total = sum(strands)
-    anime = root.get(rt.TYPE_KEY) == ml.ANIME.effect_type
     half, z = ml.second_ribbon(style, v["glow_width"])
-    if anime:
+    out = []
+    if style == mo.STYLE_ANIME:
         # 円柱 (点ごとに輪。どこから見ても太さがある) + 円柱の表面のすぐ前に、カメラを向いた芯の帯
         sides = int(v["sides"])
         bolt = ((ml.tube_ring(sides), [], None), [tuple(f) for f in ml.tube_faces(strands, sides)], True)
@@ -81,8 +87,8 @@ def build(root, v):
             ("_bolt", v["color"], bolt),
             ("_glow", v["glow_color"], (([(0.0, half, z), (0.0, -half, z)], [], None), faces, False))):
         mat = rt.flat_material(root.name + name + "_mat", color, v["opacity"], owner=root)
-        obj = wx.particle_object(root, root.name + name, template, total, mat, faces=fcs, smooth=smooth)
-        obj.data["dfx_strands"] = [n, nb, m]
+        out.append(wx.particle_object(root, root.name + name, template, total, mat, faces=fcs, smooth=smooth))
+    return out
 
 
 KINDS = dict((k.effect_type, k) for k in (ml.REAL, ml.ANIME, ml.DISCHARGE_REAL, ml.DISCHARGE_ANIME))

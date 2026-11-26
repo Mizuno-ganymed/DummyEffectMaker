@@ -195,41 +195,6 @@ class CameraShakeRemoveTool(BaseTool):
         return len(roots)
 
 
-class CameraShakeSavePresetTool(BaseTool):
-    label = u"画ぶれのパラメータを保存"
-    tab = TAB
-    category = CATEGORY
-    order = 652
-    undoable = False
-    tooltip = u"選択した画ぶれのパラメータをプリセットファイル (.json) に保存します。"
-
-    def run(self, ctx, **v):
-        from maya import cmds
-        from . import _maya_utils as mu
-
-        roots = _selected_roots(cmds, mu, u"保存する", EFFECT_TYPE)
-        return mu.save_preset_dialog(ctx, roots, EFFECT_TYPE, stored_params(), self.label, u"画ぶれ")
-
-
-class CameraShakeLoadPresetTool(BaseTool):
-    label = u"画ぶれのパラメータを読み込み"
-    tab = TAB
-    category = CATEGORY
-    order = 654
-    tooltip = (u"プリセットファイル (.json) のパラメータを選択した画ぶれに設定し、作り直します。\n"
-               u"キーを打ってある項目 (強さなど) は変更しません。")
-
-    def run(self, ctx, **v):
-        from maya import cmds
-        from . import _maya_utils as mu
-
-        roots = _selected_roots(cmds, mu, u"読み込み先の", EFFECT_TYPE)
-        values = mu.load_preset_dialog(ctx, EFFECT_TYPE, stored_params(), self.label)
-        if values is None:
-            return None
-        return rebuild_effects(cmds, mu, ctx, roots, overrides=values)
-
-
 # ---------------------------------------------------------------- 種類 (画ぶれ / 手ブレ)
 SHAKE_TYPES = (EFFECT_TYPE, "hand_shake")
 

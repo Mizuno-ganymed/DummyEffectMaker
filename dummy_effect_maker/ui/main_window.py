@@ -48,7 +48,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # 右側: 専用のアトリビュートエディタ (Maya の中だけ。選んだエフェクトのパラメータ)
         self.attribute_editor = AttributeEditor(self._attribute_backend(), run_update=self.run_update_for,
-                                                parent=self)
+                                                run_preset=self.run_preset_for, parent=self)
         self.side_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.side_splitter.addWidget(splitter)
         self.side_splitter.addWidget(self.attribute_editor)
@@ -191,6 +191,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.run_tool(tool)
                 return True
         self.log(u"  ✖ %s を更新するツールが見つかりません" % effect_type)
+        return False
+
+    def run_preset_for(self, action):
+        """アトリビュートエディタの「保存」「読み込み」: 共通のプリセットのツールを実行する (対象は選択済み)。"""
+        name = {"save": "PresetSaveTool", "load": "PresetLoadTool"}[action]
+        for tool in self.tools:
+            if type(tool).__name__ == name and tool.is_available(self.host.name):
+                self.run_tool(tool)
+                return True
+        self.log(u"  ✖ %s が見つかりません" % name)
         return False
 
     def closeEvent(self, event):

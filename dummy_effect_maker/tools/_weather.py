@@ -688,7 +688,7 @@ def warn_if_textures_hidden(cmds, ctx):
 
 # 半透明が見どころの種類。ハードウエアレンダリングの透明度が「アルファ カット」だと消える
 TRANSLUCENT_TYPES = ("rain", "rain_far", "snow_far", "fog", "fog_depth", "ground_fog",
-                     "ground_crawl", "lightning_real", "lightning_anime", "wisp",
+                     "ground_crawl", "lightning_real", "lightning_anime", "electric_real", "electric_anime", "wisp",
                      "cloth_waves")
 ALPHA_CUT = 5   # hardwareRenderingGlobals.transparencyAlgorithm の「アルファ カット」
 ALPHA_CUT_HINT = (u"  ※ ハードウエアレンダリングの透明度のアルゴリズムが「アルファ カット」のため、"

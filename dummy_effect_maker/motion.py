@@ -738,6 +738,94 @@ def discharge_probe(start, end, reach):
     return add(start, mul(d, 0.5)), add(end, mul(u, reach))
 
 
+# ---------------------------------------------------------------- 電撃 (まわりにまとわりつく / 中心から外へ放電)
+# 中心のロケータの空間 (位置 C、軸 a0 a1 a2 は大きさ込み。Y が上) で、線を「本数」本作る。
+#   まとわりつく: 半径 radius の球の上を、弧の角度 arc だけ大円に沿って這う (外へだけギザギザ)
+#   外へ放電:     中心から外へ、半径 inner の所から length の長さだけ伸びる (稲妻の本筋と同じ形)
+# 線 b は「形が変わる間隔」ごとに形 (向き) が変わる。変わる時は線ごとにずれる。
+ELECTRIC_CLING = u"まとわりつく"
+ELECTRIC_OUT = u"外へ放電"
+ELECTRIC_MODES = (ELECTRIC_CLING, ELECTRIC_OUT)
+ELECTRIC_ID = 211   # 線 b・回 c の乱数の番号 = c * これ + b + 1
+
+
+def electric_cycle(b, frame, v):
+    """線 b の今の回 (c, 始まり)。開始〜終わりのフレームの外なら None。"""
+    if frame < v["start_frame"] or frame > v["end_frame"]:
+        return None
+    chg = max(v["change_frames"], 0.5)
+    off = h(b, 0, 40, v["seed"]) * chg
+    c = int(math.floor((frame - v["start_frame"] + off) / chg))
+    return c, v["start_frame"] - off + c * chg
+
+
+def electric_on(b, c, frame, ts, v):
+    """ちらつき: 回の最初のフレームは必ず光り、その後は flicker の割合で消える。"""
+    phase = math.floor(frame - ts)
+    return phase <= 0 or h(c * ELECTRIC_ID + b + 1, phase, 90, v["seed"]) >= v["flicker"]
+
+
+def electric_dir(b, c, sd):
+    """線 b・回 c の向き (単位球の上で一様)。"""
+    z = 2 * h(b, c, 41, sd) - 1
+    ph = TAU * h(b, c, 42, sd)
+    r = math.sqrt(max(0.0, 1 - z * z))
+    return (r * math.cos(ph), z, r * math.sin(ph))
+
+
+def electric_points(style, b, c, v, n):
+    """線 b・回 c の点 (中心のロケータの空間) と、太さの割合 (太さ × これ)。"""
+    sd = v["seed"]
+    cid = c * ELECTRIC_ID + b + 1
+    d0 = electric_dir(b, c, sd)
+    kl = 1 - v["length_random"] * h(b, c, 44, sd)
+    pts, wf = [], []
+    if v["mode"] == ELECTRIC_OUT:
+        top = mul(d0, v["inner"])
+        gnd = mul(d0, v["inner"] + v["length"] * kl)
+        length, d, a, bb = lightning_frame(top, gnd)
+        jag = length * v["jag"]
+        for k in range(n):
+            u = k / float(max(n - 1, 1))
+            oa, ob = lightning_offset(style, k, n, u, cid, sd)
+            pts.append(add(add(top, mul(sub(gnd, top), u)), add(mul(a, oa * jag), mul(bb, ob * jag))))
+            wf.append(1 - (1 - v["taper"]) * u)
+        return pts, wf
+    e1 = ortho(d0, (1.0, 0.0, 0.0))
+    e2 = cross(d0, e1)
+    ps = TAU * h(b, c, 43, sd)
+    tg = add(mul(e1, math.cos(ps)), mul(e2, math.sin(ps)))   # 這う向き
+    nr = cross(d0, tg)                                          # 大円の面の向き (横のギザギザ)
+    ang = math.radians(v["arc"]) * kl
+    rad = v["radius"]
+    jag = rad * ang * v["jag"]
+    for k in range(n):
+        u = k / float(max(n - 1, 1))
+        oa, ob = lightning_offset(style, k, n, u, cid, sd)
+        dr = add(mul(d0, math.cos(ang * u)), mul(tg, math.sin(ang * u)))
+        pts.append(add(mul(dr, rad + abs(ob) * jag), mul(nr, oa * jag)))
+        wf.append(1 - (1 - v["taper"]) * abs(2 * u - 1))
+    return pts, wf
+
+
+def electric_rows(style, frame, v, center, axes, cp, cdir, count, segments):
+    """全部の線の行 [(位置, (X, Y, Z), 太さ)] (線 0 → 1 → … の順)。
+
+    center / axes は中心のロケータの位置と軸 (Y が上。軸は大きさ込み)。出ていない線は太さ 0 で中心に縮める。
+    """
+    n = int(segments)
+    rows = []
+    for b in range(int(count)):
+        cyc = electric_cycle(b, frame, v)
+        if cyc is None or not electric_on(b, cyc[0], frame, cyc[1], v):
+            rows += _strand_rows([center] * n, [0.0] * n, cp, cdir, style)
+            continue
+        local, wf = electric_points(style, b, cyc[0], v, n)
+        pts = [add(center, add(add(mul(axes[0], q[0]), mul(axes[1], q[1])), mul(axes[2], q[2]))) for q in local]
+        rows += _strand_rows(pts, [v["width"] * f for f in wf], cp, cdir, style)
+    return rows
+
+
 
 # ---------------------------------------------------------------- 細い煙 (たばこ・線香の、たゆたう煙の筋)
 # 煙の筋は「同じ所から出た煙が、それぞれ流されて並んだ跡」。筋 s の点 j は、出てから a フレーム

@@ -27,7 +27,8 @@ from ..core import BaseTool, Param, ToolError
 from . import homing
 
 EFFECT_TYPE = "vulcan"
-CATEGORY = u"射撃"
+TAB = homing.TAB
+CATEGORY = u"バルカン砲"
 
 SHAPE_SPHERE = homing.SHAPE_SPHERE
 SHAPE_SQUASHED = homing.SHAPE_SQUASHED
@@ -75,6 +76,7 @@ def _param(name, **overrides):
 
 class VulcanTool(BaseTool):
     label = u"バルカン砲"
+    tab = TAB
     category = CATEGORY
     order = 20
     tooltip = (u"発射位置と目標のロケータと、まっすぐ飛ぶ弾をまとめて作成します。\n"
@@ -120,6 +122,7 @@ class VulcanTool(BaseTool):
 
 class VulcanUpdateTool(BaseTool):
     label = u"バルカン砲を更新"
+    tab = TAB
     category = CATEGORY
     order = 25
     tooltip = (u"選択したバルカン砲を、ルートのアトリビュートの値で作り直します。\n"
@@ -130,39 +133,6 @@ class VulcanUpdateTool(BaseTool):
         from . import _maya_utils as mu
 
         return rebuild_effects(cmds, mu, ctx, _selected_roots(mu, u"更新する"))
-
-
-class VulcanSavePresetTool(BaseTool):
-    label = u"バルカン砲のパラメータを保存"
-    category = CATEGORY
-    order = 26
-    undoable = False  # シーンは変えない
-    tooltip = u"選択したバルカン砲のパラメータをプリセットファイル (.json) に保存します。"
-
-    def run(self, ctx, **v):
-        from . import _maya_utils as mu
-
-        roots = _selected_roots(mu, u"保存する")
-        return mu.save_preset_dialog(ctx, roots, EFFECT_TYPE, stored_params(),
-                                     self.label, u"バルカン砲")
-
-
-class VulcanLoadPresetTool(BaseTool):
-    label = u"バルカン砲のパラメータを読み込み"
-    category = CATEGORY
-    order = 27
-    tooltip = (u"プリセットファイル (.json) のパラメータを選択したバルカン砲に設定し、\n"
-               u"作り直します (複数選択可。ロケータの位置はそのまま)。")
-
-    def run(self, ctx, **v):
-        from maya import cmds
-        from . import _maya_utils as mu
-
-        roots = _selected_roots(mu, u"読み込み先の")
-        values = mu.load_preset_dialog(ctx, EFFECT_TYPE, stored_params(), self.label)
-        if values is None:
-            return None
-        return rebuild_effects(cmds, mu, ctx, roots, overrides=values)
 
 
 # ---------------------------------------------------------------- 構築

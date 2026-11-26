@@ -409,7 +409,28 @@ def build(cmds, mu, root, v, style, discharge=False):
     wx.track_links(cmds, mu, root, owned)
     n, m, nb = int(v["segments"]), int(v["branch_segments"]), int(v["branches"])
     rn, rm = mo.strand_rows(style, n), mo.strand_rows(style, m)
-    strands = [rn] + [rm] * nb
+    joints, shaders = strand_meshes(cmds, mu, root, v, style, [rn] + [rm] * nb, owned)
+    outputs = wx.TRANSFORM_OUTPUTS[:9]
+    owned.append(cmds.expression(name=prefix + "_main", alwaysEvaluate=True, unitConversion="all",
+                                 string=_main_expression(style, root, n, shaders[0], shaders[1], discharge)
+                                 + wx.mel_writes(joints[:rn], outputs)))
+    for br in range(nb):
+        js = joints[rn + br * rm:rn + (br + 1) * rm]
+        owned.append(cmds.expression(name="%s_branch_%02d" % (prefix, br + 1), alwaysEvaluate=True,
+                                     unitConversion="all",
+                                     string=_branch_expression(style, root, n, m, br, discharge)
+                                     + wx.mel_writes(js, outputs)))
+    if discharge:
+        _build_bursts(cmds, mu, root, v, owned)
+    wx.finish(cmds, mu, root, owned)
+
+
+def strand_meshes(cmds, mu, root, v, style, strands, owned):
+    """点の列 (strands = 各列の行の数) のジョイントと、それにスキンした帯 (_bolt / _glow)。
+
+    (ジョイント, [帯のシェーダー, 2 本目のシェーダー])。電撃 (electric.py) も使う。
+    """
+    prefix = wx.short(root)
     jgrp = cmds.ls(cmds.group(empty=True, name=prefix + "_joints", parent=root), long=True)[0]
     owned.append(jgrp)
     joints = []
@@ -433,19 +454,7 @@ def build(cmds, mu, root, v, style, discharge=False):
         cmds.sets(mesh, edit=True, forceElement=sg)
         owned.extend([shader, sg])
         shaders.append(shader)
-    outputs = wx.TRANSFORM_OUTPUTS[:9]
-    owned.append(cmds.expression(name=prefix + "_main", alwaysEvaluate=True, unitConversion="all",
-                                 string=_main_expression(style, root, n, shaders[0], shaders[1], discharge)
-                                 + wx.mel_writes(joints[:rn], outputs)))
-    for br in range(nb):
-        js = joints[rn + br * rm:rn + (br + 1) * rm]
-        owned.append(cmds.expression(name="%s_branch_%02d" % (prefix, br + 1), alwaysEvaluate=True,
-                                     unitConversion="all",
-                                     string=_branch_expression(style, root, n, m, br, discharge)
-                                     + wx.mel_writes(js, outputs)))
-    if discharge:
-        _build_bursts(cmds, mu, root, v, owned)
-    wx.finish(cmds, mu, root, owned)
+    return joints, shaders
 
 
 def _live(tool, rebuild):

@@ -23,7 +23,7 @@ from __future__ import absolute_import
 from ..core import BaseTool, Param, ToolError
 
 EFFECT_TYPE = "energy_ball"
-TAB = u"エネルギー弾"
+TAB = u"射撃"   # 追尾弾・バルカン砲と同じタブ
 CATEGORY = u"エネルギー弾"
 
 EASE_ACCEL = u"加速"
@@ -153,29 +153,45 @@ class EnergyBallUpdateTool(BaseTool):
         roots = mu.selected_effect_roots(EFFECT_TYPE)
         if not roots:
             raise ToolError(u"更新するエネルギー弾 (dfx_energyN か、その中のロケータや球) を選択してください")
-        params = stored_params()
-        for root in roots:
-            if mu.is_baked(root):
-                raise ToolError(u"%s はベイク済みのため作り直せません (Ctrl+Z でベイク前に戻せます)"
-                                % _short(root))
-        for root in roots:
-            values = mu.read_param_values(root, params)
-            mu.delete_owned(root)
-            mu.sync_param_attrs(root, params, values, LIVE_PARAMS)
-            pairs = existing_pairs(cmds, root)
-            count = values["count"]
-            for start, target in pairs[count:]:
-                cmds.delete([start, target])
-            pairs = pairs[:count]
-            for i in range(len(pairs), count):
-                pairs.append(_create_locators(cmds, mu, root, values, i, count))
-            if v["retime_all"]:
-                for i, (start, _) in enumerate(pairs):
-                    _set_timing(cmds, start, default_timing(values, i))
-            build_effect(cmds, mu, root, pairs)
-            _log(ctx, root, pairs)
-        cmds.select(roots)
-        return roots
+        return rebuild_effects(cmds, mu, ctx, roots, retime_all=v["retime_all"])
+
+
+def rebuild_effects(cmds, mu, ctx, roots, overrides=None, retime_all=False):
+    """roots を作り直す。overrides があれば先にその値を設定する (キーや接続で決まっている物は変えない)。
+
+    既存のロケータ (位置・タイミング) はそのまま。増えた分は初期値で追加、減った分は後ろから削除する。
+    """
+    params = stored_params()
+    for root in roots:
+        if mu.is_baked(root):
+            raise ToolError(u"%s はベイク済みのため作り直せません (Ctrl+Z でベイク前に戻せます)"
+                            % _short(root))
+    for root in roots:
+        values = mu.read_param_values(root, params)
+        driven = mu.driven_params(root, params) if overrides else []
+        if overrides:
+            values.update((k, x) for k, x in overrides.items() if k not in driven)
+        mu.delete_owned(root)
+        mu.sync_param_attrs(root, params, values, LIVE_PARAMS)
+        if overrides:
+            mu.write_param_values(root, params, values, skip=driven)
+        pairs = existing_pairs(cmds, root)
+        count = values["count"]
+        for start, target in pairs[count:]:
+            cmds.delete([start, target])
+        pairs = pairs[:count]
+        for i in range(len(pairs), count):
+            pairs.append(_create_locators(cmds, mu, root, values, i, count))
+        if retime_all:
+            for i, (start, _) in enumerate(pairs):
+                _set_timing(cmds, start, default_timing(values, i))
+        build_effect(cmds, mu, root, pairs)
+        _log(ctx, root, pairs)
+        ignored = [p.label for p in params if p.name in driven and p.name in overrides]
+        if ignored:
+            ctx.log(u"  ※ キーが打たれているため変更しませんでした: %s" % u", ".join(ignored))
+    cmds.select(roots)
+    return roots
 
 
 # ---------------------------------------------------------------- 構築

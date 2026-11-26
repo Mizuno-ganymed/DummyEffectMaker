@@ -133,9 +133,14 @@ def check_fire_frames(v):
 
 
 # ---------------------------------------------------------------- ツール
+TAB = u"射撃"        # 射撃タブ (追尾弾・バルカン砲・エネルギー弾)
+CATEGORY = u"追尾弾"
+
+
 class HomingTool(BaseTool):
     label = u"追尾弾"
-    category = u"射撃"
+    tab = TAB
+    category = CATEGORY
     order = 10
     tooltip = (u"ロケータ A (発射位置) / B (経由点) / C (着弾点) と、A から B を経由して"
                u"C まで飛ぶ弾 (球体 / つぶれた球体) をまとめて作成します。\n"
@@ -198,7 +203,8 @@ class HomingTool(BaseTool):
 
 class HomingUpdateTool(BaseTool):
     label = u"追尾弾を更新"
-    category = u"射撃"
+    tab = TAB
+    category = CATEGORY
     order = 15
     tooltip = (u"選択した追尾弾を、ルートのアトリビュートの値で作り直します。\n"
                u"チャンネルボックスで「(更新)」の付いた項目を変えたあとに使います。\n"
@@ -210,40 +216,6 @@ class HomingUpdateTool(BaseTool):
 
         roots = _selected_roots(mu, u"更新する")
         return rebuild_effects(cmds, mu, ctx, roots)
-
-
-class HomingSavePresetTool(BaseTool):
-    label = u"追尾弾のパラメータを保存"
-    category = u"射撃"
-    order = 16
-    undoable = False  # シーンは変えない
-    tooltip = (u"選択した追尾弾のパラメータ (ルートのアトリビュート) を\n"
-               u"プリセットファイル (.json) に保存します。")
-
-    def run(self, ctx, **v):
-        from . import _maya_utils as mu
-
-        roots = _selected_roots(mu, u"保存する")
-        return mu.save_preset_dialog(ctx, roots, EFFECT_TYPE, stored_params(),
-                                     self.label, u"追尾弾")
-
-
-class HomingLoadPresetTool(BaseTool):
-    label = u"追尾弾のパラメータを読み込み"
-    category = u"射撃"
-    order = 17
-    tooltip = (u"プリセットファイル (.json) のパラメータを選択した追尾弾に設定し、\n"
-               u"作り直します (複数選択可。ロケータの位置はそのまま)。")
-
-    def run(self, ctx, **v):
-        from maya import cmds
-        from . import _maya_utils as mu
-
-        roots = _selected_roots(mu, u"読み込み先の")
-        values = mu.load_preset_dialog(ctx, EFFECT_TYPE, stored_params(), self.label)
-        if values is None:
-            return None
-        return rebuild_effects(cmds, mu, ctx, roots, overrides=values)
 
 
 # ---------------------------------------------------------------- 構築

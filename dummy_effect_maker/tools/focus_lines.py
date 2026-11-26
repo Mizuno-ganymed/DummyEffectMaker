@@ -304,42 +304,6 @@ class FocusLinesUpdateTool(BaseTool):
         return rebuild_effects(cmds, mu, ctx, _selected_roots(mu, u"更新する"))
 
 
-class FocusLinesSavePresetTool(BaseTool):
-    label = u"集中線のパラメータを保存"
-    tab = TAB
-    category = CATEGORY
-    order = 612
-    undoable = False  # シーンは変えない
-    tooltip = (u"選択した集中線のパラメータ (ルートのアトリビュート) を\n"
-               u"プリセットファイル (.json) に保存します。中心の円の位置・大きさは含みません。")
-
-    def run(self, ctx, **v):
-        from . import _maya_utils as mu
-
-        roots = _selected_roots(mu, u"保存する")
-        return mu.save_preset_dialog(ctx, roots, EFFECT_TYPE, stored_params(),
-                                     self.label, u"集中線")
-
-
-class FocusLinesLoadPresetTool(BaseTool):
-    label = u"集中線のパラメータを読み込み"
-    tab = TAB
-    category = CATEGORY
-    order = 614
-    tooltip = (u"プリセットファイル (.json) のパラメータを選択した集中線に設定し、\n"
-               u"作り直します (複数選択可。中心の円はそのまま)。")
-
-    def run(self, ctx, **v):
-        from maya import cmds
-        from . import _maya_utils as mu
-
-        roots = _selected_roots(mu, u"読み込み先の")
-        values = mu.load_preset_dialog(ctx, EFFECT_TYPE, stored_params(), self.label)
-        if values is None:
-            return None
-        return rebuild_effects(cmds, mu, ctx, roots, overrides=values)
-
-
 def _selected_roots(mu, purpose):
     roots = mu.selected_effect_roots(EFFECT_TYPE)
     if not roots:

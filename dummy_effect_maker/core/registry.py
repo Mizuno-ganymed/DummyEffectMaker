@@ -45,12 +45,12 @@ def discover(package_name, on_error=None):
 def group_by_tab(tools):
     """[(tab, [tool, ...]), ...] をタブの登場順 (= 最も小さい order 順) で返す。
 
-    メニューに入るツール (menu を指定したもの) は含めない。
+    メニューに入るツール (menu を指定したもの) と、隠したツール (hidden) は含めない。
     """
     groups = []
     index = {}
     for tool in tools:
-        if tool.menu:
+        if tool.menu or getattr(tool, "hidden", False):
             continue
         if tool.tab not in index:
             index[tool.tab] = len(groups)
@@ -64,7 +64,7 @@ def group_by_menu(tools):
     groups = []
     index = {}
     for tool in tools:
-        if not tool.menu:
+        if not tool.menu or getattr(tool, "hidden", False):
             continue
         if tool.menu not in index:
             index[tool.menu] = len(groups)

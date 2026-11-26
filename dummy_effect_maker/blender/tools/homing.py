@@ -26,6 +26,7 @@ ROLES = ("locA", "locB", "locC")
 
 class HomingTool(BaseTool):
     label = mh.HomingTool.label
+    tab = mh.HomingTool.tab
     category = mh.HomingTool.category
     order = 10
     hosts = ("blender",)

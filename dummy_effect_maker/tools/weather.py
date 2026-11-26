@@ -15,7 +15,7 @@ from __future__ import absolute_import
 
 import math
 
-from ..core import BaseTool, Param, ToolError
+from ..core import BaseTool, Param
 from . import _weather as wx
 
 H = wx.mel_hash
@@ -696,49 +696,6 @@ class WeatherUpdateTool(BaseTool):
         from . import _maya_utils as mu
 
         return wx.rebuild_effects(cmds, mu, ctx, wx.selected_roots(cmds, mu, u"更新する"))
-
-
-class WeatherSavePresetTool(BaseTool):
-    label = u"天候のパラメータを保存"
-    tab = wx.TAB
-    category = u"調整"
-    order = 892
-    undoable = False
-    tooltip = u"選択した天候 (風も可) 1 つのパラメータをプリセットファイル (.json) に保存します。"
-
-    def run(self, ctx, **v):
-        from maya import cmds
-        from . import _maya_utils as mu
-
-        roots = wx.selected_roots(cmds, mu, u"保存する")
-        if len(roots) > 1:
-            raise ToolError(u"保存する天候を 1 つだけ選択してください (現在 %d 個)" % len(roots))
-        kind = wx.kind_of(cmds, mu, roots[0])
-        return mu.save_preset_dialog(ctx, roots, kind.effect_type, kind.stored_params(),
-                                     self.label, kind.noun)
-
-
-class WeatherLoadPresetTool(BaseTool):
-    label = u"天候のパラメータを読み込み"
-    tab = wx.TAB
-    category = u"調整"
-    order = 894
-    tooltip = (u"プリセットファイル (.json) のパラメータを選択した天候に設定し、作り直します。\n"
-               u"同じ種類のプリセットだけ読み込めます。")
-
-    def run(self, ctx, **v):
-        from maya import cmds
-        from . import _maya_utils as mu
-
-        roots = wx.selected_roots(cmds, mu, u"読み込み先の")
-        kinds = set(wx.kind_of(cmds, mu, r).effect_type for r in roots)
-        if len(kinds) > 1:
-            raise ToolError(u"読み込み先は同じ種類の天候だけ選択してください")
-        kind = wx.KINDS[kinds.pop()]
-        values = mu.load_preset_dialog(ctx, kind.effect_type, kind.stored_params(), self.label)
-        if values is None:
-            return None
-        return wx.rebuild_effects(cmds, mu, ctx, roots, overrides=values)
 
 
 # ---------------------------------------------------------------- 種類の登録

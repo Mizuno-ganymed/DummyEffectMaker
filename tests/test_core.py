@@ -141,42 +141,42 @@ def test_homing_travel_keys():
 def test_tools_are_grouped_into_tabs():
     tools = registry.discover("dummy_effect_maker.tools")
     tabs = [(tab, [t.label for t in ts]) for tab, ts in registry.group_by_tab(tools)]
-    assert [tab for tab, _ in tabs] == [u"ツール", u"カメラ", u"エネルギー弾", u"衝撃波", u"お化けブラー",
-                                        u"天候", u"爆発", u"布"]
+    assert [tab for tab, _ in tabs] == [u"射撃", u"カメラ", u"衝撃波", u"お化けブラー", u"天候", u"爆発", u"布"]
     assert dict(tabs)[u"布"] == [u"波打つ布", u"波打つ布を更新"]
     assert dict(tabs)[u"爆発"] == [
         u"コリジョンに指定", u"コリジョンを解除", u"爆発", u"爆発 (単体)", u"爆発を更新", u"爆発を外す",
-        u"爆発のパラメータを保存", u"爆発のパラメータを読み込み",
-        u"核爆発", u"核爆発を更新", u"核爆発のパラメータを保存", u"核爆発のパラメータを読み込み"]
+        u"核爆発", u"核爆発を更新"]
     assert dict(tabs)[u"天候"] == [
         u"風", u"風を更新", u"雨 (線と跳ね)", u"雨 (遠景の筒)", u"雪 (粒)", u"雪 (遠景の筒)",
         u"土煙 (スプライト)", u"土煙 (もこもこ)", u"細い煙 (たばこ・線香)", u"火花 (線)", u"火花 (尾を引く)",
         u"霧 (霧の板)", u"霧 (遠景の重ね板)", u"地霧 (重ね板)", u"地霧 (這う霧)",
-        u"稲妻 (実写)", u"稲妻 (アニメ)", u"放電 (実写)", u"放電 (アニメ)", u"天候を更新", u"天候のパラメータを保存", u"天候のパラメータを読み込み"]
+        u"稲妻 (実写)", u"稲妻 (アニメ)", u"放電 (実写)", u"放電 (アニメ)", u"電撃 (実写)", u"電撃 (アニメ)", u"天候を更新"]
     weather_tools = [t for t in tools if t.tab == u"天候"]
     assert [c for c, _ in registry.group_by_category(weather_tools)] == [
         u"風", u"雨", u"雪", u"土煙", u"煙", u"火花", u"霧", u"地霧", u"稲妻", u"調整"]
     assert dict(tabs)[u"お化けブラー"] == [
-        u"残像", u"スミア (引き伸ばし)", u"軌跡", u"お化けブラーを更新",
-        u"お化けブラーのパラメータを保存", u"お化けブラーのパラメータを読み込み"]
-    assert dict(tabs)[u"衝撃波"] == [u"衝撃波", u"衝撃波を更新", u"衝撃波のパラメータを保存",
-                                   u"衝撃波のパラメータを読み込み"]
-    assert dict(tabs)[u"エネルギー弾"] == [u"エネルギー弾", u"エネルギー弾を更新"]
+        u"残像", u"スミア (引き伸ばし)", u"軌跡", u"お化けブラーを更新"]
+    assert dict(tabs)[u"衝撃波"] == [u"衝撃波", u"衝撃波を更新"]
     assert dict(tabs)[u"カメラ"] == [
-        u"集中線", u"集中線を更新", u"集中線のパラメータを保存", u"集中線のパラメータを読み込み",
-        u"スピードライン", u"スピードラインを更新", u"スピードラインのパラメータを保存",
-        u"スピードラインのパラメータを読み込み", u"スピードライン (トンネル)", u"スピードライン (トンネル) を更新",
-        u"画ぶれ", u"画ぶれを更新", u"画ぶれのパラメータを保存", u"画ぶれのパラメータを読み込み",
+        u"集中線", u"集中線を更新",
+        u"スピードライン", u"スピードラインを更新", u"スピードライン (トンネル)", u"スピードライン (トンネル) を更新",
+        u"画ぶれ", u"画ぶれを更新",
         u"画ぶれを外す",
-        u"手ブレ", u"手ブレを更新", u"手ブレのパラメータを保存", u"手ブレのパラメータを読み込み",
+        u"手ブレ", u"手ブレを更新",
         u"手ブレを外す"]
     # ベイクと全削除はタブではなく上部の「シーン」メニュー
     menus = [(m, [t.label for t in ts]) for m, ts in registry.group_by_menu(tools)]
     assert menus == [(u"シーン", [u"ベイク", u"書き出し (Unreal 用)", u"ダミーエフェクトを全削除"])]
-    assert u"ベイク" not in dict(tabs)[u"ツール"]
-    assert dict(tabs)[u"ツール"] == [
-        u"追尾弾", u"追尾弾を更新", u"追尾弾のパラメータを保存", u"追尾弾のパラメータを読み込み",
-        u"バルカン砲", u"バルカン砲を更新", u"バルカン砲のパラメータを保存", u"バルカン砲のパラメータを読み込み"]
+    assert u"ベイク" not in dict(tabs)[u"射撃"]
+    # パラメータの保存・読み込みは全部の種類で共通 (アトリビュートエディタのボタンから。タブ・メニューには出ない)
+    hidden = [t for t in tools if t.hidden]
+    assert sorted(type(t).__name__ for t in hidden) == ["PresetLoadTool", "PresetSaveTool"]
+    assert not any(u"パラメータ" in label for _, labels in tabs + menus for label in labels)
+    # 射撃タブ: 追尾弾・バルカン砲・エネルギー弾を項目 (グループ) に分ける
+    assert dict(tabs)[u"射撃"] == [
+        u"追尾弾", u"追尾弾を更新", u"バルカン砲", u"バルカン砲を更新", u"エネルギー弾", u"エネルギー弾を更新"]
+    shooting = [t for t in tools if t.tab == u"射撃" and not t.hidden]
+    assert [c for c, _ in registry.group_by_category(shooting)] == [u"追尾弾", u"バルカン砲", u"エネルギー弾"]
 
 
 def test_menu_tools_are_not_in_tabs():
@@ -812,7 +812,7 @@ def test_ghost_blur_smear_points():
 
 
 def test_weather_params_are_live_rebuild_or_create():
-    assert len(wx.KINDS) == 22   # (+ スピードライン (トンネル))
+    assert len(wx.KINDS) == 24   # (+ スピードライン (トンネル)、電撃 2 つ)
     # 天候 18 (稲妻・放電 各 2 つ・細い煙を含む) + 核爆発・爆発 (単体)・波打つ布 (同じ仕組み)
     for kind in wx.KINDS.values():
         names = set(p.name for p in kind.tool.params)
@@ -1366,3 +1366,59 @@ def test_tunnel_lines_roll_and_width():
     tr = dict(v, thickness_random=1.0)
     ks = [mo.tunnel_item(i, 4, tr, True)[2][0] for i in range(40)]
     assert all(0 <= k <= 1 for k in ks) and max(ks) - min(ks) > 0.2
+
+
+def test_electric_cling_and_outward():
+    from dummy_effect_maker import motion as mo
+    from dummy_effect_maker.tools import electric as el
+    v = el.ElectricRealTool.default_values()
+    assert v["mode"] == mo.ELECTRIC_CLING and "mode" in el.REAL.live and "count" in el.REAL.rebuild
+    assert "sides" in el.ANIME.rebuild and "sides" not in [p.name for p in el.ElectricRealTool.params]
+    v.update(start_frame=5.0, end_frame=30.0, change_frames=2.0, flicker=0.0, length_random=0.0)
+    # 開始〜終わりの間だけ出る。形の変わる時は線ごとにずれる
+    assert mo.electric_cycle(0, 4, v) is None and mo.electric_cycle(0, 31, v) is None
+    c, ts = mo.electric_cycle(0, 10, v)
+    assert ts <= 10 < ts + 2.0 and mo.electric_cycle(0, ts + 2.0, v)[0] == c + 1
+    assert len(set(round(mo.electric_cycle(b, 10, v)[1] % 2.0, 6) for b in range(6))) > 1
+    center = (1.0, 2.0, 3.0)
+    axes = ((2.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))   # X に 2 倍の楕円体
+    n, count = 24, 6
+    rows = mo.electric_rows(mo.STYLE_REAL, 10, v, center, axes, (0, 2, 30), (0, 0, -1), count, n)
+    assert len(rows) == n * count and all(w > 0 for _, _, w in rows)
+    # まとわりつく: 両端は球 (半径 radius) の上、途中も球の外側だけにずれる。両端が細い
+    for b in range(count):
+        c, _ = mo.electric_cycle(b, 10, v)
+        pts, wf = mo.electric_points(mo.STYLE_REAL, b, c, v, n)
+        assert _close(mo.mag(pts[0]), v["radius"]) and _close(mo.mag(pts[-1]), v["radius"])
+        assert all(mo.mag(p) >= v["radius"] - 0.2 * v["radius"] for p in pts)
+        assert wf[0] < wf[n // 2] and _close(wf[0], v["taper"]) and _close(wf[-1], v["taper"])
+        # 中心のロケータの空間 → ワールド (X は 2 倍)
+        q = pts[0]
+        p = rows[b * n][0]
+        assert _close(p[0], 1.0 + 2.0 * q[0]) and _close(p[1], 2.0 + q[1]) and _close(p[2], 3.0 + q[2])
+    # 外へ放電: 出る所の半径から、長さの分だけ外へ。先が細い
+    vo = dict(v, mode=mo.ELECTRIC_OUT, inner=0.5, length=2.0)
+    for b in range(count):
+        c, _ = mo.electric_cycle(b, 10, vo)
+        pts, wf = mo.electric_points(mo.STYLE_ANIME, b, c, vo, 8)
+        d0 = mo.electric_dir(b, c, vo["seed"])
+        assert _close(mo.mag(pts[0]), 0.5) and _close(mo.dot(pts[-1], d0), 2.5)
+        assert _close(wf[0], 1.0) and _close(wf[-1], vo["taper"])
+    # ちらつき 1: 回の最初のフレームだけ光る
+    vf = dict(v, flicker=1.0)
+    c, ts = mo.electric_cycle(0, 10, vf)
+    assert mo.electric_on(0, c, ts, ts, vf) and not mo.electric_on(0, c, ts + 1.0, ts, vf)
+    # 出ていない線は太さ 0 で中心に縮む
+    off = mo.electric_rows(mo.STYLE_REAL, 40, v, center, axes, (0, 2, 30), (0, 0, -1), count, n)
+    assert all(w == 0 and p == center for p, _, w in off)
+    # オブジェクトの箱に合わせる (薄い軸は広げる)
+    c, half = el.fit_box((-1.0, -0.0, -2.0), (1.0, 0.0, 2.0))
+    assert c == (0.0, 0.0, 0.0) and half == (1.0, 0.5, 2.0)
+
+
+def test_presets_cover_every_effect_type():
+    from dummy_effect_maker import catalog
+    from dummy_effect_maker.tools import preset
+    # 共通の「パラメータを読み込み」は、全部の種類を作り直せる
+    assert all(callable(preset.rebuilder(s.effect_type)) for s in catalog.specs())
+    assert preset.PresetSaveTool.hidden and preset.PresetLoadTool.hidden and not preset.PresetSaveTool.undoable

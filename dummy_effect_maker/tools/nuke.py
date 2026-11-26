@@ -128,40 +128,6 @@ class NukeUpdateTool(BaseTool):
         return wx.rebuild_effects(cmds, mu, ctx, _selected(cmds, mu, u"更新する"))
 
 
-class NukeSavePresetTool(BaseTool):
-    label = u"核爆発のパラメータを保存"
-    tab = TAB
-    category = CATEGORY
-    order = 924
-    undoable = False
-    tooltip = u"選択した核爆発 1 つのパラメータをプリセットファイル (.json) に保存します。"
-
-    def run(self, ctx, **v):
-        from maya import cmds
-        from . import _maya_utils as mu
-        roots = _selected(cmds, mu, u"保存する")
-        if len(roots) > 1:
-            raise ToolError(u"保存する核爆発を 1 つだけ選択してください (現在 %d 個)" % len(roots))
-        return mu.save_preset_dialog(ctx, roots, EFFECT_TYPE, KIND.stored_params(), self.label, KIND.noun)
-
-
-class NukeLoadPresetTool(BaseTool):
-    label = u"核爆発のパラメータを読み込み"
-    tab = TAB
-    category = CATEGORY
-    order = 926
-    tooltip = u"プリセットファイル (.json) のパラメータを選択した核爆発に設定し、作り直します。"
-
-    def run(self, ctx, **v):
-        from maya import cmds
-        from . import _maya_utils as mu
-        roots = _selected(cmds, mu, u"読み込み先の")
-        values = mu.load_preset_dialog(ctx, EFFECT_TYPE, KIND.stored_params(), self.label)
-        if values is None:
-            return None
-        return wx.rebuild_effects(cmds, mu, ctx, roots, overrides=values)
-
-
 def _selected(cmds, mu, purpose):
     roots = [r for r in mu.selected_effect_roots()
              if cmds.getAttr(r + "." + mu.EFFECT_TYPE_ATTR) == EFFECT_TYPE]
