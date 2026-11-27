@@ -148,12 +148,13 @@ def test_tools_are_grouped_into_tabs():
     assert dict(tabs)[u"天候"] == [
         u"風", u"風を更新", u"雨 (線と跳ね)", u"雨 (遠景の筒)", u"雪 (粒)", u"雪 (遠景の筒)",
         u"落ち葉 (舞い散る)", u"落ち葉 (地面の渦)",
-        u"土煙 (スプライト)", u"土煙 (もこもこ)", u"細い煙 (たばこ・線香)", u"火花 (線)", u"火花 (尾を引く)",
+        u"土煙 (スプライト)", u"土煙 (もこもこ)",
+        u"足元の砂煙 (スプライト)", u"足元の砂煙 (もこもこ)", u"細い煙 (たばこ・線香)", u"火花 (線)", u"火花 (尾を引く)",
         u"霧 (霧の板)", u"霧 (遠景の重ね板)", u"地霧 (重ね板)", u"地霧 (這う霧)",
         u"稲妻 (実写)", u"稲妻 (アニメ)", u"放電 (実写)", u"放電 (アニメ)", u"電撃 (実写)", u"電撃 (アニメ)", u"天候を更新"]
     weather_tools = [t for t in tools if t.tab == u"天候"]
     assert [c for c, _ in registry.group_by_category(weather_tools)] == [
-        u"風", u"雨", u"雪", u"落ち葉", u"土煙", u"煙", u"火花", u"霧", u"地霧", u"稲妻", u"調整"]
+        u"風", u"雨", u"雪", u"落ち葉", u"土煙", u"砂煙", u"煙", u"火花", u"霧", u"地霧", u"稲妻", u"調整"]
     assert dict(tabs)[u"お化けブラー"] == [
         u"残像", u"スミア (引き伸ばし)", u"軌跡", u"お化けブラーを更新"]
     assert dict(tabs)[u"衝撃波"] == [u"衝撃波", u"衝撃波を更新"]
@@ -813,7 +814,7 @@ def test_ghost_blur_smear_points():
 
 
 def test_weather_params_are_live_rebuild_or_create():
-    assert len(wx.KINDS) == 26   # (+ スピードライン (トンネル)、電撃 2 つ、落ち葉 2 つ)
+    assert len(wx.KINDS) == 28   # (+ スピードライン (トンネル)、電撃 2 つ、落ち葉 2 つ、足元の砂煙 2 つ)
     # 天候 18 (稲妻・放電 各 2 つ・細い煙を含む) + 核爆発・爆発 (単体)・波打つ布 (同じ仕組み)
     for kind in wx.KINDS.values():
         names = set(p.name for p in kind.tool.params)
@@ -949,7 +950,7 @@ def test_file_param_and_weather_texture_option():
     assert p.coerce(None) == "" and p.coerce("C:/a.png") == "C:/a.png"
     with_texture = [k.effect_type for k in wx.KINDS.values()
                     if "texture" in [p.name for p in k.tool.params]]
-    assert sorted(with_texture) == sorted(["dust", "rain_far", "snow_far", "fog", "ground_fog",
+    assert sorted(with_texture) == sorted(["dust", "foot_dust", "rain_far", "snow_far", "fog", "ground_fog",
                                            "ground_crawl", "wisp"])
     for name in with_texture:
         kind = wx.KINDS[name]
@@ -1474,3 +1475,40 @@ def test_leaves_fall_and_karman_vortex():
     m = [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 5, 0, 0, 1]   # Y まわりに 90 度・(5, 0, 0)
     p, axes = mo.leaf_place(m, (1.0, 0.0, 0.0), mo.leaf_axes(0, 0, 0))
     assert _close3(p, (5, 0, -1)) and _close3(axes[0], (0, 0, -1)) and _close3(axes[1], (0, 1, 0))
+
+
+def test_foot_dust_drifts_low_around_the_emitter():
+    from dummy_effect_maker import motion as mo
+    from dummy_effect_maker.tools import foot_dust as fd
+    v = fd.FootDustTool.default_values()
+    v.update(start_frame=10.0, life=40.0, life_random=0.0, follow=0.0, ground=0.5, wobble=0.0)
+
+    def still(t):   # 出る場所は (3, 2, -1) に止まっている (高さ 2 でも砂煙は地面 0.5 に出る)
+        return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 3.0, 2.0, -1.0, 1]
+    assert not any(mo.foot_dust(i, 9.9, v, still, mo.Wind())[2] for i in range(40))   # 開始前は出ない
+    seen = 0
+    for f in range(10, 300, 7):
+        for i in range(40):
+            p, sz, vis, a, cyc = mo.foot_dust(i, f, v, still, mo.Wind())
+            assert 0 <= a < 40.0 + 1e-9
+            if vis:
+                seen += 1
+                r = math.hypot(p[0] - 3.0, p[2] + 1.0)
+                assert r <= v["radius"] + v["spread"] * a + 1e-9          # 足元の円から広がるだけ
+                assert 0.5 <= p[1] <= 0.5 + sz * 0.3 + v["rise"] + 1e-9   # 地面すれすれ
+    assert seen > 200
+    # 出直し続ける (同じ塊が次の回で別の所に出る)
+    p0 = mo.foot_dust(0, 100, v, still, mo.Wind())
+    p1 = mo.foot_dust(0, 140, v, still, mo.Wind())
+    assert p0[4][0] + 1 == p1[4][0] and abs(p0[3] - p1[3]) < 1e-9 and not _close3(p0[0], p1[0], 1e-6)
+    # 付いて動く割合: 0 は湧いた所に残り、1 は出る場所に付いて動く
+    def moving(t):
+        return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0.1 * t, 0.0, 0.0, 1]
+    v.update(radius=0.0, spread=0.0, rise=0.0)
+    p, sz, vis, a, cyc = mo.foot_dust(3, 200, v, moving, mo.Wind())
+    assert abs(p[0] - 0.1 * (200 - a)) < 1e-9
+    v["follow"] = 1.0
+    assert abs(mo.foot_dust(3, 200, v, moving, mo.Wind())[0][0] - 20.0) < 1e-9
+    # 量 0 なら出ない
+    v["amount"] = 0.0
+    assert not any(mo.foot_dust(i, 150, v, still, mo.Wind())[2] for i in range(40))

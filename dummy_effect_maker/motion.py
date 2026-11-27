@@ -378,6 +378,55 @@ def dust_euler(i, v, a):
             h(i, 0, 9, sd) * 360 + v["spin"] * 0.5 * a)
 
 
+# ---------------------------------------------------------------- 足元の砂煙
+def foot_dust(i, frame, v, emitter_at, wind):
+    """足元を漂う砂煙の塊 i の (位置, 大きさ, 表示, 出てからのフレーム, 回り)。_foot_body (Maya) と同じ式。
+
+    塊は「消えるまでのフレーム数」ごとに出直し続ける (開始フレームから少しずつ出始める)。
+    出た時の出る場所の真下 (地面の高さ) の円の中から出て、地面すれすれを回りながら広がり、
+    ふわりと浮いて大きくなって消える。「付いて動く割合」が 1 なら出る場所に付いて動き、
+    0 ならその場に残る (歩くと後ろに尾を引く)。
+    """
+    sd = v["seed"]
+    life = max(v["life"] * (1 + (h(i, 0, 1, sd) - 0.5) * 2 * v["life_random"]), 1.0)
+    u = (frame - v["start_frame"]) / life + h(i, 0, 2, sd)
+    c = math.floor(u)
+    a = (u - c) * life
+    ts = frame - a
+    ci = int(c)
+    es, en = emitter_at(ts), emitter_at(frame)
+    fol = v["follow"]
+    ex = es[12] + (en[12] - es[12]) * fol
+    ez = es[14] + (en[14] - es[14]) * fol
+    turn = 1.0 if h(i, ci, 4, sd) < 0.5 else -1.0
+    rho = v["radius"] * math.sqrt(h(i, ci, 3, sd)) + v["spread"] * a
+    th = TAU * h(i, ci, 5, sd) + turn * math.radians(v["swirl"]) * a
+    grow = 1 - math.exp(-3.0 * a / life)
+    sz = (v["size_start"] + (v["size_end"] - v["size_start"]) * grow) \
+        * (1 + (h(i, ci, 6, sd) - 0.5) * 2 * v["size_random"])
+    sz *= clamp(0.0, 1.0, a / (0.2 * life))
+    if a > 0.6 * life:
+        sz *= max(0.0, (life - a) / (0.4 * life))
+    hy = v["rise"] * h(i, ci, 8, sd) * grow \
+        + v["wobble"] * (0.5 + 0.5 * math.sin(TAU * a / 40.0 + TAU * h(i, ci, 9, sd)))
+    wd = mul(sub(wind.drift_at(frame), wind.drift_at(ts)), wind.influence)
+    p = add((ex + rho * math.cos(th), v["ground"] + sz * 0.3 + hy, ez + rho * math.sin(th)), wd)
+    vis = ts >= v["start_frame"] and h(i, ci, 7, sd) < v["amount"] and sz > 1e-9
+    return p, sz, vis, a, (ci, turn)
+
+
+def foot_dust_roll(i, v, a, cycle):
+    ci, turn = cycle
+    return h(i, ci, 10, v["seed"]) * 360 + turn * v["spin"] * a
+
+
+def foot_dust_euler(i, v, a, cycle):
+    ci, turn = cycle
+    sd = v["seed"]
+    return (h(i, ci, 10, sd) * 360 + turn * v["spin"] * a, h(i, ci, 11, sd) * 360,
+            h(i, ci, 12, sd) * 360 + turn * v["spin"] * 0.5 * a)
+
+
 def spark(i, frame, v, count, emitter_at, wind, age=None):
     """火花の (位置, 速さ, 表示, 消え方の割合, 寿命)。spawn + spark_motion。"""
     s = spawn(i, frame, v, count, emitter_at, wind)

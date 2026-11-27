@@ -657,7 +657,7 @@ def kind_of(cmds, mu, root):
 
 
 # 色・透明度をテクスチャ (画像・ランプ) で作る種類。ビューポートのテクスチャ表示が OFF だと黒くなる
-TEXTURED_TYPES = ("dust", "dust_mesh", "wisp", "rain_far", "snow_far", "fog", "ground_fog", "ground_crawl")
+TEXTURED_TYPES = ("dust", "dust_mesh", "foot_dust", "foot_dust_mesh", "wisp", "rain_far", "snow_far", "fog", "ground_fog", "ground_crawl")
 TEXTURE_HINT = (u"  ※ ビューポートのテクスチャ表示が OFF のため、黒く (不透明に) 表示されます。"
                 u"ビューポートで 6 キー (シェーディング → ハードウェアテクスチャリング) を押すと正しく表示されます")
 

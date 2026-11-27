@@ -5961,6 +5961,94 @@ def t53_leaves():
 
 
 
+@section
+def t54_foot_dust():
+    """足元の砂煙 (スプライト・もこもこ): 動く・跳ぶオブジェクトの足元で、位置・向き・大きさ・表示が motion.py と同じ。"""
+    from dummy_effect_maker import motion as mo, catalog
+    from dummy_effect_maker.tools import foot_dust as fd, _weather as wx, wind, weather, bake
+    cam = _weather_scene()
+    cmds.select(clear=True)
+    run_tool(wind.WindTool, strength=0.2, gust=1.0)
+
+    def wind_of(root):
+        wr = wx.find_link(cmds, root, wx.WIND_ATTR)
+        if not wr:
+            return mo.Wind()
+        tabs = [cmds.getAttr(wr + "." + a) for a in wx.DRIFT_ATTRS + wx.WIND_VEC_ATTRS]
+        return mo.Wind(list(zip(*tabs[:3])), list(zip(*tabs[3:])),
+                       cmds.getAttr(wr + "." + wx.DRIFT_START_ATTR), cmds.getAttr(root + ".dfx_wind_influence"))
+
+    def puffs(root):
+        r = wx.short(root)
+        return cmds.listRelatives(cmds.ls(r + "_puffs", long=True)[0], children=True, fullPath=True)
+
+    hero = cmds.polyCube(name="hero")[0]
+    cmds.setKeyframe(hero, attribute="translateX", time=1, value=-4)
+    cmds.setKeyframe(hero, attribute="translateX", time=40, value=4)
+    cmds.setKeyframe(hero, attribute="translateY", time=10, value=0)
+    cmds.setKeyframe(hero, attribute="translateY", time=16, value=2)   # 跳んでも砂煙は地面
+    cmds.setKeyframe(hero, attribute="translateY", time=22, value=0)
+    for tool, kw in ((fd.FootDustTool, {"count": 12}), (fd.FootDustMeshTool, {"count": 9})):
+        cmds.select([hero, cam])   # カメラも選ぶと、板はそのカメラを向く
+        root = cmds.ls(run_tool(tool, start_frame=3.0, life=15.0, follow=0.4, ground=0.25, **kw), long=True)[0]
+        em = cmds.ls(wx.short(root) + "_emitter", long=True)[0]
+        mesh = tool is fd.FootDustMeshTool
+        check(u"%s: 天候タブの砂煙にあり、出る場所がオブジェクトに付いて動き、風とつながる" % tool.label,
+              tool.category == u"砂煙" and len(puffs(root)) == kw["count"]
+              and near(cmds.getAttr(em + ".worldMatrix[0]")[12:15], cmds.getAttr(hero + ".worldMatrix[0]")[12:15], 1e-6)
+              and wx.find_link(cmds, root, wx.WIND_ATTR)
+              and (mesh or wx.find_link(cmds, root, wx.CAMERA_ATTR) == cam) and catalog.spec(tool is fd.FootDustTool and "foot_dust"
+                                                                          or "foot_dust_mesh").group == catalog.PARTICLES)
+        v = mu.read_param_values(root, (fd.SPRITE if not mesh else fd.MESH).stored_params())
+        wd = wind_of(root)
+        at = (lambda e: (lambda t: cmds.getAttr(e + ".worldMatrix[0]", time=t)))(em)
+        bad = []
+        shown = 0
+        for f in (2, 5, 13, 17, 29, 44):
+            pos(cam, f)
+            m = cmds.getAttr(cam + ".worldMatrix[0]")
+            cp, cdir = (m[12], m[13], m[14]), (-m[8], -m[9], -m[10])
+            for i, n in enumerate(puffs(root)):
+                p, sz, vis, a, cyc = mo.foot_dust(i, f, v, at, wd)
+                if bool(cmds.getAttr(n + ".visibility")) != vis:
+                    bad.append((f, i, "vis", vis))
+                    continue
+                if not vis:
+                    continue
+                shown += 1
+                wm = cmds.getAttr(n + ".worldMatrix[0]")
+                if not near(wm[12:15], p, 1e-4) or any(abs(_mag(wm[4 * r:4 * r + 3]) - sz) > 1e-4 for r in range(3)):
+                    bad.append((f, i, p, wm[12:15]))
+                    continue
+                if mesh:
+                    if not near(cmds.getAttr(n + ".rotate")[0], mo.foot_dust_euler(i, v, a, cyc), 1e-3):
+                        bad.append((f, i, "rot"))
+                else:
+                    rows = mo.billboard(p, cp, cdir, mo.foot_dust_roll(i, v, a, cyc))
+                    if any(not near(_unit(wm[4 * r:4 * r + 3]), rows[r], 1e-3) for r in range(3)):
+                        bad.append((f, i, "axes"))
+        check(u"%s: 位置・向き・大きさ・表示が motion.py と同じ (動いて跳ぶオブジェクト・風)" % tool.label,
+              not bad and shown > 10, str((shown, bad[:2])))
+    # パラメータをすぐ変えられる (作り直さない)
+    cmds.setAttr(root + ".dfx_swirl", 6.0)
+    cmds.setAttr(root + ".dfx_ground", 1.0)
+    v = mu.read_param_values(root, fd.MESH.stored_params())
+    pos(cam, 20)
+    bad = [i for i, n in enumerate(puffs(root))
+           if mo.foot_dust(i, 20, v, at, wd)[2] and not near(cmds.getAttr(n + ".worldMatrix[0]")[12:15],
+                                                            mo.foot_dust(i, 20, v, at, wd)[0], 1e-4)]
+    check(u"足元の砂煙: 回る速さ・地面の高さはすぐ反映", not bad, str(bad[:3]))
+    cmds.setAttr(root + ".dfx_count", 5)
+    cmds.select(root)
+    run_tool(weather.WeatherUpdateTool)
+    check(u"足元の砂煙: 塊の数を変えて「天候を更新」", len(puffs(root)) == 5
+          and cmds.ls(wx.short(root) + "_emitter", long=True) == [em])
+    cmds.select(root)
+    run_tool(bake.BakeTool)
+    exprs = [e for e in cmds.ls(type="expression") or [] if e.startswith(wx.short(root) + "_")]
+    check(u"足元の砂煙: ベイクできる", mu.is_baked(root) and not exprs, str(exprs[:2]))
+
+
 SECTIONS = (t01_registry, t02_create_everything, t03_undo_redo, t04_options, t05_errors,
            t06_save_and_cleanup, t07_long_travel_visibility, t08_adjust,
            t09_stretch_and_migration, t10_presets, t11_bake, t12_settings_and_ui,
@@ -5976,7 +6064,8 @@ SECTIONS = (t01_registry, t02_create_everything, t03_undo_redo, t04_options, t05
            t37_weather_common, t38_straight_colors,
            t39_weather_custom_texture, t40_explosion, t41_export_shot,
            t42_motion_matches_maya, t43_nuke, t44_lightning, t45_attribute_editor, t46_explosion_single,
-           t47_discharge, t48_wisp, t49_cloth, t50_tunnel_lines, t51_electric, t52_presets_all_types, t53_leaves)
+           t47_discharge, t48_wisp, t49_cloth, t50_tunnel_lines, t51_electric, t52_presets_all_types, t53_leaves,
+           t54_foot_dust)
 for fn in SECTIONS:
     if not ONLY or any(fn.__name__.startswith(o) for o in ONLY):
         fn()

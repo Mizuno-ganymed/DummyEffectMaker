@@ -1463,6 +1463,56 @@ def b21_leaves():
 
 
 @section
+def b22_foot_dust():
+    from dummy_effect_maker.blender.tools import _wx, foot_dust as bf, wind as bwind
+    from dummy_effect_maker.tools import foot_dust as mf
+    from dummy_effect_maker import motion as mo
+    new_scene()
+    cam = scene_camera()
+    select()
+    op(bwind.WindTool, strength=0.15)
+    hero = bpy.data.objects.new("hero", None)
+    bpy.context.scene.collection.objects.link(hero)
+    for f, loc in ((1, (-4, 0, 0)), (10, (-1.6, 0, 0)), (16, (0, 0, 2)), (22, (1.6, 0, 0)), (40, (4, 0, 0))):
+        hero.location = loc
+        hero.keyframe_insert("location", frame=f)
+    for tool, kind, name, kw in ((bf.FootDustTool, mf.SPRITE, "dfx_footDust1", {"count": 12}),
+                                 (bf.FootDustMeshTool, mf.MESH, "dfx_footDustMesh1", {"count": 9})):
+        select(hero, cam)
+        op(tool, start_frame=3.0, life=15.0, follow=0.4, ground=0.25, **kw)
+        root = bpy.data.objects.get(name)
+        em = rt.control(root, "emitter")
+        obj = _wx.part(root, "_puffs")
+        check(u"%s: 出る場所がオブジェクトに付いて動き、風とつながる" % tool.label,
+              em is not None and em.parent == hero and obj.data["dfx_count"] == kw["count"]
+              and root.get("dfx_wind") == bpy.data.objects.get("dfx_wind1"))
+        v = rt.read_params(root, kind.stored_params())
+        at = _wx.emitter_at(root)
+        bad, shown = [], 0
+        for f in (2, 5, 13, 17, 29, 44):
+            bpy.context.scene.frame_set(f)
+            cp, cdir = _wx.camera_yup(root)
+            wind = _wx.wind_of(root)
+            for i in range(kw["count"]):
+                p, sz, vis, a, cyc = mo.foot_dust(i, f, v, at, wind)
+                if not vis:
+                    pl = _wx.hidden(p)
+                elif kind is mf.MESH:
+                    pl = (p, _wx.euler_axes(*mo.foot_dust_euler(i, v, a, cyc)), (sz,) * 3)
+                else:
+                    pl = (p, mo.billboard(p, cp, cdir, mo.foot_dust_roll(i, v, a, cyc)), (sz,) * 3)
+                shown += bool(vis)
+                if not same_particle(obj, i, pl):
+                    bad.append((f, i))
+        check(u"%s: Maya 版と同じ計算 (動いて跳ぶオブジェクト・風)" % tool.label, not bad and shown > 10,
+              str((shown, bad[:3])))
+    root["dfx_count"] = 5
+    select(root)
+    op(bscene.UpdateEffectsTool)
+    check(u"足元の砂煙: 更新で塊の数が変わる", _wx.part(root, "_puffs").data["dfx_count"] == 5)
+
+
+@section
 def b05_delete_all():
     op(bscene.DeleteAllTool)
     check("全削除: ツールで作った物が全部消える (カメラは残る)",
@@ -1475,7 +1525,7 @@ for fn in (b01_register, b02_vulcan, b03_shockwave, b04_export, b05_delete_all, 
            b07_rain_snow, b08_dust_sparks, b09_homing_energy, b10_explosion,
            b11_shakes, b12_export_more, b13_nuke, b14_lightning,
            b15_explosion_single, b16_discharge, b17_wisp,
-           b18_cloth, b19_tunnel_lines, b20_electric, b21_leaves):
+           b18_cloth, b19_tunnel_lines, b20_electric, b21_leaves, b22_foot_dust):
     fn()
 fails = [r for r in RESULTS if not r[1]]
 print("\nSUMMARY: %d passed, %d failed" % (len(RESULTS) - len(fails), len(fails)))
