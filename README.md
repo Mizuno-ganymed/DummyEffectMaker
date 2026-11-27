@@ -965,7 +965,10 @@ scripts/maya_launcher.py   Maya 起動用スニペット
 scripts/blender_launcher.py  Blender で試す時の起動スクリプト
 scripts/blender_addon.py   Blender のアドオン (リポジトリから読み込む)
 run_standalone.py          Maya 外での起動 (UI 確認用)
-tests/                     Maya なしで動くテスト (blender_verify.py は Blender 版の検証)
+tests/test_core.py         Maya・Blender なしで動くテスト (run_unit.py で pytest なしでも動く)
+tests/maya_verify.py       Maya 版の検証 (mayapy。全部のエフェクトの動き・更新・ベイク・書き出し)
+tests/blender_verify.py    Blender 版の検証
+CLAUDE.md                  開発の約束・テストの動かし方・つまずいた所 (Claude Code が読む)
 docs/exchange_format.md    ショットの受け渡し形式 (Unreal 用 JSON) の説明
 ```
 
@@ -979,8 +982,9 @@ from ..core import BaseTool, Param
 
 class MyTool(BaseTool):
     label = u"マイツール"          # ボタン名 (必須)
-    tab = u"ツール"                # 上部のタブ (新しい名前ならタブが増える)
+    tab = u"射撃"                  # 上部のタブ (新しい名前ならタブが増える)
     # menu = u"シーン"            # 指定するとタブではなく上部のメニューに入る
+    # hidden = True               # タブにもメニューにも出さない (アトリビュートエディタのボタンなどから使う)
     category = u"射撃"             # タブ内のグループ名
     order = 30                     # 並び順
     params = [Param("count", u"個数", 10, minimum=1)]   # あれば □ ボタンが付く
@@ -996,6 +1000,13 @@ class MyTool(BaseTool):
 ## 開発
 
 ```bash
-python -m pytest tests          # Maya なしのテスト
+python tests/run_unit.py        # Maya・Blender なしのテスト (pytest があれば python -m pytest tests でもよい)
 python run_standalone.py        # Maya 外でランチャーを表示 (PySide6 が必要)
 ```
+
+```powershell
+$env:PYTHONIOENCODING = "utf-8"; & "C:/Program Files/Autodesk/Maya2027/bin/mayapy.exe" tests/maya_verify.py
+```
+
+Maya 版の検証は全部で数分〜10 分ほどかかる。後ろに節の名前の始まり (例: `t53 t45_`) を付けると、その節だけ動かす。
+Blender 版の検証は「Blender 版」の節を参照。開発の約束やつまずいた所は CLAUDE.md にまとめてある。
